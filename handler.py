@@ -1,5 +1,6 @@
 """
 RunPod Serverless Handler for Qwen3.6-35B-A3B Uncensored (Ollama)
+Uses network volume at /runpod-volume for persistent model storage
 """
 import runpod
 import subprocess
@@ -13,7 +14,7 @@ import threading
 
 # Configuration
 MODEL_NAME = "qwen3.6-35b-uncensored"
-MODEL_PATH = "/models/qwen3.6-35b-uncensored.gguf"
+MODEL_PATH = "/runpod-volume/models/qwen3.6-35b-uncensored.gguf"
 OLLAMA_HOST = "127.0.0.1"
 OLLAMA_PORT = 11434
 MODFILE_PATH = "/Modelfile"
@@ -59,30 +60,85 @@ def start_ollama():
     return False
 
 
-def download_model():
-    """Download the model into Ollama."""
-    print(f"Creating model from {MODFILE_PATH}...", flush=True)
+def download_model_if_needed():
+    """Download model to volume if not present."""
+    print(f"Checking model at {MODEL_PATH}...", flush=True)
 
-    # Check if model already exists
-    r = requests.get(f"http://{OLLAMA_HOST}:{OLLAMA_PORT}/api/tags", timeout=10)
-    models = [m['name'] for m in r.json().get('models', [])]
-
-    if MODEL_NAME in models or f"{MODEL_NAME}:latest" in models:
-        print(f"Model {MODEL_NAME} already exists", flush=True)
+    # Check if model already exists on volume
+    if os.path.exists(MODEL_PATH):
+        size_gb = os.path.getsize(MODEL_PATH) / (1024**3)
+        print(f"Model already exists ({size_gb:.1f} GB)", flush=True)
         return True
 
-    # Create model from Modelfile
-    try:
-        with open(MODFILE_PATH, 'r') as f:
-            modelfile_content = f.read()
+    # Create models directory on volume
+    os.makedirs("/runpod-volume/models", exist_ok=True)
 
+    print("Model not found. Downloading APEX (23.9GB)...", flush=True)
+
+    # Try APEX first (smaller, fits in 32GB)
+    urls = [
+        "https://huggingface.co/LuffyTheFox/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-V6-GGUF/resolve/main/Hermes3.6-35B-A3B-Uncensored-Genesis-V6-APEX.gguf",
+        "https://huggingface.co/LuffyTheFox/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-V6-GGUF/resolve/main/Hermes3.6-35B-A3B-Uncensored-Genesis-V6-APEX-Compact.gguf",
+    ]
+
+    for url in urls:
+        filename = url.split("/")[-1]
+        print(f"Trying {filename}...", flush=True)
+
+        try:
+            result = subprocess.run(
+                ["wget", "--tries=3", "--timeout=300", "-q", "-O", MODEL_PATH, url],
+                capture_output=True,
+                text=True,
+                timeout=1800  # 30 min timeout
+            )
+
+            if result.returncode == 0 and os.path.exists(MODEL_PATH):
+                size_gb = os.path.getsize(MODEL_PATH) / (1024**3)
+                print(f"Downloaded {filename} ({size_gb:.1f} GB)", flush=True)
+                return True
+            else:
+                print(f"Download failed: {result.stderr}", flush=True)
+                if os.path.exists(MODEL_PATH):
+                    os.remove(MODEL_PATH)
+
+        except Exception as e:
+            print(f"Error: {e}", flush=True)
+            if os.path.exists(MODEL_PATH):
+                os.remove(MODEL_PATH)
+
+    print("Failed to download model", flush=True)
+    return False
+
+
+def create_ollama_model():
+    """Create model in Ollama from GGUF file."""
+    print(f"Creating Ollama model {MODEL_NAME}...", flush=True)
+
+    # Check if model already exists
+    try:
+        r = requests.get(f"http://{OLLAMA_HOST}:{OLLAMA_PORT}/api/tags", timeout=10)
+        models = [m['name'] for m in r.json().get('models', [])]
+
+        if MODEL_NAME in models or f"{MODEL_NAME}:latest" in models:
+            print(f"Model {MODEL_NAME} already exists in Ollama", flush=True)
+            return True
+    except:
+        pass
+
+    # Read Modelfile
+    with open(MODFILE_PATH, 'r') as f:
+        modelfile_content = f.read()
+
+    # Create model
+    try:
         r = requests.post(
             f"http://{OLLAMA_HOST}:{OLLAMA_PORT}/api/create",
             json={
                 "name": MODEL_NAME,
                 "modelfile": modelfile_content
             },
-            timeout=600  # 10 minutes for model creation
+            timeout=600  # 10 minutes
         )
 
         if r.status_code == 200:
@@ -182,13 +238,29 @@ if __name__ == "__main__":
 
     print("=== RunPod Ollama Handler Starting ===", flush=True)
     print(f"Model: {MODEL_NAME}", flush=True)
+    print(f"Model path: {MODEL_PATH}", flush=True)
 
+    # Check volume exists
+    if not os.path.exists("/runpod-volume"):
+        print("ERROR: /runpod-volume not found! Attach network volume.", flush=True)
+        sys.exit(1)
+
+    # Create models directory
+    os.makedirs("/runpod-volume/models", exist_ok=True)
+
+    # Download model if needed
+    if not download_model_if_needed():
+        print("Failed to download model", flush=True)
+        sys.exit(1)
+
+    # Start Ollama
     if start_ollama():
-        if download_model():
+        # Create Ollama model from GGUF
+        if create_ollama_model():
             print("Model ready, entering RunPod handler loop...", flush=True)
             runpod.serverless.start({"handler": handler})
         else:
-            print("Failed to download model", flush=True)
+            print("Failed to create Ollama model", flush=True)
             sys.exit(1)
     else:
         print("Failed to start Ollama", flush=True)

@@ -1,4 +1,4 @@
-FROM /models/qwen3.6-35b-uncensored.gguf
+FROM /runpod-volume/models/qwen3.6-35b-uncensored.gguf
 
 PARAMETER num_ctx 8192
 PARAMETER num_gpu 99

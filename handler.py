@@ -1,5 +1,5 @@
 """
-RunPod Serverless Handler for Qwen3.6-35B-A3B Uncensored
+RunPod Serverless Handler for Qwen3.6-35B-A3B Uncensored (Ollama)
 """
 import runpod
 import subprocess
@@ -12,76 +12,89 @@ import os
 import threading
 
 # Configuration
+MODEL_NAME = "qwen3.6-35b-uncensored"
 MODEL_PATH = "/models/qwen3.6-35b-uncensored.gguf"
-SERVER_PORT = 8080
-SERVER_HOST = "0.0.0.0"
+OLLAMA_HOST = "127.0.0.1"
+OLLAMA_PORT = 11434
+MODFILE_PATH = "/Modelfile"
 
 server_process = None
 
 
-def start_server():
-    """Start llama-server in background."""
+def start_ollama():
+    """Start Ollama server in background."""
     global server_process
 
-    # Check if model exists
-    if not os.path.exists(MODEL_PATH):
-        print(f"ERROR: Model not found at {MODEL_PATH}", flush=True)
-        for root, dirs, files in os.walk("/models"):
-            for f in files:
-                print(f"  {os.path.join(root, f)}", flush=True)
-        return False
-
-    cmd = [
-        "llama-server",
-        "--model", MODEL_PATH,
-        "--host", SERVER_HOST,
-        "--port", str(SERVER_PORT),
-        "--n-gpu-layers", "-1",
-        "--ctx-size", "8192",
-        "--parallel", "2",
-        "--cont-batching",
-        "--flash-attn",
-        "--cache-type-k", "q8_0",
-        "--cache-type-v", "q8_0",
-        "--jinja",
-        "--metrics",
-    ]
-
-    print(f"Starting llama-server...", flush=True)
-    print(f"Command: {' '.join(cmd)}", flush=True)
+    print("Starting Ollama server...", flush=True)
 
     server_process = subprocess.Popen(
-        cmd,
+        ["ollama", "serve"],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1
     )
 
-    # Read output in real-time for debugging
+    # Read output in real-time
     def read_output():
         for line in server_process.stdout:
-            print(f"[llama] {line.strip()}", flush=True)
+            print(f"[ollama] {line.strip()}", flush=True)
 
     t = threading.Thread(target=read_output, daemon=True)
     t.start()
 
-    # Wait for server to be ready
-    print("Waiting for server to be ready...", flush=True)
-    for i in range(180):
+    # Wait for Ollama to be ready
+    print("Waiting for Ollama to be ready...", flush=True)
+    for i in range(60):
         try:
-            r = requests.get(f"http://{SERVER_HOST}:{SERVER_PORT}/health", timeout=5)
+            r = requests.get(f"http://{OLLAMA_HOST}:{OLLAMA_PORT}/api/tags", timeout=5)
             if r.status_code == 200:
-                print(f"Server ready after {i+1}s", flush=True)
+                print(f"Ollama ready after {i+1}s", flush=True)
                 return True
-        except requests.exceptions.ConnectionError:
+        except:
             pass
-        except Exception as e:
-            print(f"Health check: {e}", flush=True)
         time.sleep(1)
 
-    print("Server failed to start within 180s", flush=True)
+    print("Ollama failed to start within 60s", flush=True)
     return False
+
+
+def download_model():
+    """Download the model into Ollama."""
+    print(f"Creating model from {MODFILE_PATH}...", flush=True)
+
+    # Check if model already exists
+    r = requests.get(f"http://{OLLAMA_HOST}:{OLLAMA_PORT}/api/tags", timeout=10)
+    models = [m['name'] for m in r.json().get('models', [])]
+
+    if MODEL_NAME in models or f"{MODEL_NAME}:latest" in models:
+        print(f"Model {MODEL_NAME} already exists", flush=True)
+        return True
+
+    # Create model from Modelfile
+    try:
+        with open(MODFILE_PATH, 'r') as f:
+            modelfile_content = f.read()
+
+        r = requests.post(
+            f"http://{OLLAMA_HOST}:{OLLAMA_PORT}/api/create",
+            json={
+                "name": MODEL_NAME,
+                "modelfile": modelfile_content
+            },
+            timeout=600  # 10 minutes for model creation
+        )
+
+        if r.status_code == 200:
+            print(f"Model {MODEL_NAME} created successfully", flush=True)
+            return True
+        else:
+            print(f"Failed to create model: {r.text}", flush=True)
+            return False
+
+    except Exception as e:
+        print(f"Error creating model: {e}", flush=True)
+        return False
 
 
 def handler(job):
@@ -103,31 +116,51 @@ def handler(job):
 
     try:
         payload = {
-            "model": "qwen3.6-35b-uncensored",
+            "model": MODEL_NAME,
             "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "top_p": top_p,
             "stream": stream,
+            "options": {
+                "num_predict": max_tokens,
+                "temperature": temperature,
+                "top_p": top_p,
+            }
         }
 
         print(f"Request: messages={len(messages)}, max_tokens={max_tokens}", flush=True)
 
         r = requests.post(
-            f"http://{SERVER_HOST}:{SERVER_PORT}/v1/chat/completions",
+            f"http://{OLLAMA_HOST}:{OLLAMA_PORT}/api/chat",
             json=payload,
             timeout=300
         )
 
         if r.status_code != 200:
-            print(f"LLM error {r.status_code}: {r.text[:200]}", flush=True)
-            return {"error": f"LLM returned {r.status_code}: {r.text}"}
+            print(f"Ollama error {r.status_code}: {r.text[:200]}", flush=True)
+            return {"error": f"Ollama returned {r.status_code}: {r.text}"}
 
         result = r.json()
-        usage = result.get("usage", {})
-        print(f"Response: {usage.get('completion_tokens', 0)} tokens", flush=True)
 
-        return result
+        # Convert to OpenAI format
+        choice = result.get("message", {})
+        return {
+            "id": f"chatcmpl-{int(time.time())}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": MODEL_NAME,
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": choice.get("role", "assistant"),
+                    "content": choice.get("content", "")
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": result.get("prompt_eval_count", 0),
+                "completion_tokens": result.get("eval_count", 0),
+                "total_tokens": result.get("prompt_eval_count", 0) + result.get("eval_count", 0)
+            }
+        }
 
     except Exception as e:
         print(f"Handler error: {e}", flush=True)
@@ -147,13 +180,16 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, cleanup)
     signal.signal(signal.SIGINT, cleanup)
 
-    print("=== RunPod Handler Starting ===", flush=True)
-    print(f"Model: {MODEL_PATH}", flush=True)
-    print(f"Port: {SERVER_PORT}", flush=True)
+    print("=== RunPod Ollama Handler Starting ===", flush=True)
+    print(f"Model: {MODEL_NAME}", flush=True)
 
-    if start_server():
-        print("Server started, entering RunPod handler loop...", flush=True)
-        runpod.serverless.start({"handler": handler})
+    if start_ollama():
+        if download_model():
+            print("Model ready, entering RunPod handler loop...", flush=True)
+            runpod.serverless.start({"handler": handler})
+        else:
+            print("Failed to download model", flush=True)
+            sys.exit(1)
     else:
-        print("Failed to start server", flush=True)
+        print("Failed to start Ollama", flush=True)
         sys.exit(1)

@@ -21,7 +21,6 @@ RUN cmake -B build -DGGML_CUDA=ON -DLLAMA_CURL=OFF \
 RUN mkdir -p /models
 
 # Download the GGUF model (Q8_0 quantization)
-# Using wget with retry for reliability
 RUN wget --tries=3 --timeout=60 -q --show-progress \
     -O /models/qwen3.6-35b-uncensored.gguf \
     "https://huggingface.co/LuffyTheFox/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-V6-GGUF/resolve/main/Hermes3.6-35B-A3B-Uncensored-Genesis-V6-Q8_0.gguf" \
@@ -44,4 +43,5 @@ ENV HTTP_PORT=8080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
-CMD ["python", "/handler.py"]
+# -u for unbuffered output (important for RunPod logs)
+CMD ["python3", "-u", "/handler.py"]

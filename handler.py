@@ -1,5 +1,5 @@
 """
-RunPod Serverless Handler - Minimal for debugging
+RunPod Serverless Handler - Downloads model on first run
 """
 import runpod
 import subprocess
@@ -13,11 +13,51 @@ import threading
 
 # Configuration
 MODEL_NAME = "qwen3.6-35b-uncensored"
-MODEL_PATH = "/runpod-volume/models/qwen3.6-35b-uncensored.gguf"
+MODEL_DIR = "/runpod-volume/models"
+MODEL_PATH = f"{MODEL_DIR}/qwen3.6-35b-uncensored.gguf"
 OLLAMA_HOST = "0.0.0.0"
 OLLAMA_PORT = 11434
 
 server_process = None
+
+# Model URLs (try APEX first - 23.9GB, fits in 32GB VRAM)
+MODEL_URLS = [
+    "https://huggingface.co/LuffyTheFox/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-V6-GGUF/resolve/main/Hermes3.6-35B-A3B-Uncensored-Genesis-V6-APEX.gguf",
+    "https://huggingface.co/LuffyTheFox/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-V6-GGUF/resolve/main/Hermes3.6-35B-A3B-Uncensored-Genesis-V6-APEX-Compact.gguf",
+]
+
+
+def download_model():
+    """Download model to volume."""
+    os.makedirs(MODEL_DIR, exist_ok=True)
+
+    for url in MODEL_URLS:
+        filename = url.split("/")[-1]
+        print(f"Downloading {filename}...", flush=True)
+
+        try:
+            result = subprocess.run(
+                ["wget", "--tries=3", "--timeout=300", "-q", "--show-progress", "-O", MODEL_PATH, url],
+                capture_output=True,
+                text=True,
+                timeout=3600  # 1 hour timeout
+            )
+
+            if result.returncode == 0 and os.path.exists(MODEL_PATH):
+                size_gb = os.path.getsize(MODEL_PATH) / (1024**3)
+                print(f"Downloaded {filename} ({size_gb:.1f} GB)", flush=True)
+                return True
+            else:
+                print(f"Download failed: {result.stderr}", flush=True)
+                if os.path.exists(MODEL_PATH):
+                    os.remove(MODEL_PATH)
+
+        except Exception as e:
+            print(f"Error: {e}", flush=True)
+            if os.path.exists(MODEL_PATH):
+                os.remove(MODEL_PATH)
+
+    return False
 
 
 def handler(job):
@@ -82,17 +122,22 @@ if __name__ == "__main__":
     print("=== Handler Starting ===", flush=True)
 
     # Check volume
-    if os.path.exists("/runpod-volume"):
-        print(f"Volume exists: {os.listdir('/runpod-volume')}", flush=True)
-    else:
-        print("WARNING: /runpod-volume not found!", flush=True)
+    if not os.path.exists("/runpod-volume"):
+        print("ERROR: /runpod-volume not found!", flush=True)
+        sys.exit(1)
 
-    # Check model
+    # Create models directory
+    os.makedirs(MODEL_DIR, exist_ok=True)
+
+    # Check/download model
     if os.path.exists(MODEL_PATH):
         size_gb = os.path.getsize(MODEL_PATH) / (1024**3)
         print(f"Model exists: {size_gb:.1f} GB", flush=True)
     else:
-        print(f"Model not found at {MODEL_PATH}", flush=True)
+        print("Model not found. Downloading...", flush=True)
+        if not download_model():
+            print("Failed to download model", flush=True)
+            sys.exit(1)
 
     # Start Ollama
     print("Starting Ollama...", flush=True)
@@ -104,7 +149,6 @@ if __name__ == "__main__":
         bufsize=1
     )
 
-    # Read output
     def read_output():
         for line in server_process.stdout:
             print(f"[ollama] {line.strip()}", flush=True)
@@ -135,12 +179,6 @@ if __name__ == "__main__":
     if MODEL_NAME not in models and f"{MODEL_NAME}:latest" not in models:
         print(f"Creating model {MODEL_NAME}...", flush=True)
 
-        if not os.path.exists(MODEL_PATH):
-            print(f"ERROR: Model file not found at {MODEL_PATH}", flush=True)
-            print("Please download the model to the volume first.", flush=True)
-            sys.exit(1)
-
-        # Create from Modelfile
         modelfile = f"FROM {MODEL_PATH}\nPARAMETER num_ctx 8192\nPARAMETER num_gpu 99"
 
         r = requests.post(

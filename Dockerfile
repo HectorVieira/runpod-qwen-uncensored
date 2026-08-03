@@ -1,22 +1,13 @@
-FROM ollama/ollama:latest
+FROM runpod/pytorch:2.1.1-py3.10-cuda12.1.1-devel-ubuntu22.04
 
-# Install Python and dependencies
-RUN apt-get update && apt-get install -y \
-    python3 \
-    python3-pip \
-    curl \
-    wget \
-    && rm -rf /var/lib/apt/lists/* \
-    && ln -s /usr/bin/python3 /usr/bin/python \
-    && pip3 install --break-system-packages --no-cache-dir runpod requests
+# Install Ollama
+RUN curl -fsSL https://ollama.com/install.sh | sh
 
-# Copy handler
+# Install Python deps
+RUN pip install --no-cache-dir runpod requests
+
+# Copy files
 COPY handler.py /handler.py
 COPY Modelfile /Modelfile
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=300s --retries=3 \
-    CMD curl -f http://localhost:11434/api/tags || exit 1
-
-# -u for unbuffered output
 CMD ["python3", "-u", "/handler.py"]

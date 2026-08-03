@@ -1,7 +1,8 @@
 FROM runpod/pytorch:2.1.1-py3.10-cuda12.1.1-devel-ubuntu22.04
 
-# Install Ollama
-RUN curl -fsSL https://ollama.com/install.sh | sh
+# Install Ollama manually
+RUN curl -L -o /usr/local/bin/ollama https://ollama.com/download/ollama-linux-amd64 \
+    && chmod +x /usr/local/bin/ollama
 
 # Install Python deps
 RUN pip install --no-cache-dir runpod requests

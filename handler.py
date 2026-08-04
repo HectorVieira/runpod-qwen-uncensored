@@ -1,6 +1,6 @@
 """
 RunPod Serverless Handler - Qwen3.6-35B-A3B Uncensored (Ollama)
-Model already downloaded to /workspace/models/
+Model at /runpod-volume/models/
 """
 import runpod
 import subprocess
@@ -13,7 +13,7 @@ import os
 import threading
 
 MODEL_NAME = "qwen3.6-35b-uncensored"
-MODEL_DIR = "/workspace/models"
+MODEL_DIR = "/runpod-volume/models"
 MODEL_PATH = f"{MODEL_DIR}/qwen3.6-35b-uncensored.gguf"
 OLLAMA_HOST = "0.0.0.0"
 OLLAMA_PORT = 11434
@@ -61,6 +61,7 @@ if __name__ == "__main__":
 
     if not os.path.exists(MODEL_PATH):
         print(f"ERROR: Model not found at {MODEL_PATH}", flush=True)
+        print(f"Available: {os.listdir(MODEL_DIR) if os.path.exists(MODEL_DIR) else 'dir not found'}", flush=True)
         sys.exit(1)
 
     size_gb = os.path.getsize(MODEL_PATH) / (1024**3)

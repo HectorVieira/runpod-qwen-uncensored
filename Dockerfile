@@ -1,24 +1,23 @@
 FROM runpod/pytorch:2.1.1-py3.10-cuda12.1.1-devel-ubuntu22.04
 
 # Install dependencies
-RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y curl wget build-essential cmake && rm -rf /var/lib/apt/lists/*
 
-# Check architecture and install Ollama
-RUN ARCH=$(uname -m) && echo "Architecture: $ARCH" && \
-    if [ "$ARCH" = "x86_64" ]; then \
-        curl -L -o /usr/local/bin/ollama https://ollama.com/download/ollama-linux-amd64 && chmod +x /usr/local/bin/ollama; \
-    elif [ "$ARCH" = "aarch64" ]; then \
-        curl -L -o /usr/local/bin/ollama https://ollama.com/download/ollama-linux-arm64 && chmod +x /usr/local/bin/ollama; \
-    else \
-        echo "Unsupported architecture: $ARCH" && exit 1; \
-    fi && \
-    /usr/local/bin/ollama --version
+# Build llama.cpp with CUDA
+RUN git clone --depth 1 https://github.com/ggml-org/llama.cpp.git /opt/llama.cpp \
+    && cd /opt/llama.cpp \
+    && cmake -B build -DGGML_CUDA=ON -DLLAMA_CURL=OFF \
+    && cmake --build build --config Release -j$(nproc) \
+    && cp build/bin/llama-server /usr/local/bin/ \
+    && chmod +x /usr/local/bin/llama-server
+
+# Verify llama-server works
+RUN /usr/local/bin/llama-server --help | head -5
 
 # Install Python deps
-RUN python3.10 -m pip install --no-cache-dir runpod requests
+RUN python3.10 -m pip install --no-cache-dir runpod requests fastapi uvicorn
 
 # Copy files
 COPY handler.py /handler.py
-COPY Modelfile /Modelfile
 
 CMD ["python3.10", "-u", "/handler.py"]

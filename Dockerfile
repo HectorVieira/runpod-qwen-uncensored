@@ -11,3 +11,4 @@ RUN pip3 install --no-cache-dir runpod requests
 COPY handler.py /handler.py
 
 CMD ["python3", "-u", "/handler.py"]
+# force rebuild

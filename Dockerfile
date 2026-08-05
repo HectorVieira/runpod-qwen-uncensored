@@ -8,8 +8,7 @@ RUN wget -q "https://github.com/ggml-org/llama.cpp/releases/download/b10275/llam
     && tar -xzf /tmp/llama.tar.gz -C /tmp/ \
     && cp /tmp/llama-b10275-bin-ubuntu-x64/bin/llama-server /usr/local/bin/ \
     && chmod +x /usr/local/bin/llama-server \
-    && rm -rf /tmp/llama* \
-    && /usr/local/bin/llama-server --version
+    && rm -rf /tmp/llama*
 
 # Install Python deps
 RUN python3.10 -m pip install --no-cache-dir runpod requests

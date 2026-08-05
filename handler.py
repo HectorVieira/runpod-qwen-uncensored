@@ -78,13 +78,11 @@ if __name__ == "__main__":
         "--model", MODEL_PATH,
         "--host", SERVER_HOST,
         "--port", str(SERVER_PORT),
-        "--n-gpu-layers", "-1",
-        "--ctx-size", "8192",
-        "--parallel", "2",
+        "--n-gpu-layers", "35",
+        "--ctx-size", "4096",
+        "--parallel", "1",
         "--cont-batching",
         "--flash-attn",
-        "--cache-type-k", "q8_0",
-        "--cache-type-v", "q8_0",
     ]
 
     print(f"Starting llama-server...", flush=True)

@@ -1,19 +1,9 @@
-FROM runpod/pytorch:2.1.1-py3.10-cuda12.1.1-devel-ubuntu22.04
-
-# Install dependencies
-RUN apt-get update && apt-get install -y curl wget && rm -rf /var/lib/apt/lists/*
-
-# Download pre-built llama-server (CUDA)
-RUN wget -q "https://github.com/ggml-org/llama.cpp/releases/download/b10275/llama-b10275-bin-ubuntu-x64.tar.gz" -O /tmp/llama.tar.gz \
-    && tar -xzf /tmp/llama.tar.gz -C /tmp/ \
-    && cp /tmp/llama-b10275-bin-ubuntu-x64/bin/llama-server /usr/local/bin/ \
-    && chmod +x /usr/local/bin/llama-server \
-    && rm -rf /tmp/llama*
+FROM hungmol/llama.cpp:server-cuda
 
 # Install Python deps
-RUN python3.10 -m pip install --no-cache-dir runpod requests
+RUN pip install --no-cache-dir runpod requests
 
 # Copy handler
 COPY handler.py /handler.py
 
-CMD ["python3.10", "-u", "/handler.py"]
+CMD ["python3", "-u", "/handler.py"]

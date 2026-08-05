@@ -4,11 +4,10 @@ FROM ghcr.io/ggml-org/llama.cpp:full-cuda13
 ENTRYPOINT []
 
 # Install Python and pip
-RUN apt-get update && apt-get install -y python3 python3-pip && rm -rf /var/lib/apt/lists/* \
-    && ln -s /usr/bin/python3 /usr/bin/python
+RUN apt-get update && apt-get install -y python3 python3-pip python3-venv && rm -rf /var/lib/apt/lists/*
 
 # Install Python deps
-RUN pip3 install --no-cache-dir runpod requests
+RUN pip3 install --break-system-packages --no-cache-dir runpod requests
 
 # Copy handler
 COPY handler.py /handler.py

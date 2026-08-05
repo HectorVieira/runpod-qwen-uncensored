@@ -1,94 +1,43 @@
 """
-RunPod Serverless Handler - Qwen3.6-35B-A3B Uncensored (llama.cpp)
+Diagnostic handler
 """
-import runpod
-import subprocess
-import time
-import json
-import requests
-import signal
 import sys
 import os
-import threading
+import subprocess
 
-MODEL_PATH = "/runpod-volume/models/qwen3.6-35b-uncensored.gguf"
-SERVER_HOST = "0.0.0.0"
-SERVER_PORT = 8080
+print("=== DIAGNOSTIC ===", flush=True)
+print(f"Python: {sys.version}", flush=True)
+print(f"CWD: {os.getcwd()}", flush=True)
+print(f"PATH: {os.environ.get('PATH', 'N/A')}", flush=True)
 
-server_process = None
+# Check model
+if os.path.exists("/runpod-volume/models/qwen3.6-35b-uncensored.gguf"):
+    size = os.path.getsize("/runpod-volume/models/qwen3.6-35b-uncensored.gguf")
+    print(f"Model: {size / 1024 / 1024 / 1024:.1f} GB", flush=True)
+else:
+    print("Model: NOT FOUND", flush=True)
 
+# Check llama-server
+import shutil
+llama_path = shutil.which("llama-server")
+print(f"llama-server: {llama_path}", flush=True)
+
+if llama_path:
+    result = subprocess.run([llama_path, "--help"], capture_output=True, text=True, timeout=5)
+    print(f"llama-server help: {result.stdout[:200]}", flush=True)
+
+# Check runpod
+try:
+    import runpod
+    print(f"RunPod SDK: OK", flush=True)
+except Exception as e:
+    print(f"RunPod SDK ERROR: {e}", flush=True)
+
+print("=== END ===", flush=True)
 
 def handler(job):
-    job_input = job.get("input", {})
-    messages = job_input.get("messages", [])
-    prompt = job_input.get("prompt", "")
-    if not messages and prompt:
-        messages = [{"role": "user", "content": prompt}]
-    if not messages:
-        return {"error": "No messages or prompt provided"}
-    try:
-        payload = {
-            "messages": messages,
-            "max_tokens": job_input.get("max_tokens", 1024),
-            "temperature": job_input.get("temperature", 0.7),
-            "stream": False,
-        }
-        r = requests.post(f"http://{SERVER_HOST}:{SERVER_PORT}/v1/chat/completions", json=payload, timeout=300)
-        if r.status_code != 200:
-            return {"error": f"llama-server {r.status_code}: {r.text[:200]}"}
-        return r.json()
-    except Exception as e:
-        return {"error": str(e)}
-
+    return {"status": "ok"}
 
 if __name__ == "__main__":
-    print("=== Handler Starting ===", flush=True)
-
-    if not os.path.exists(MODEL_PATH):
-        print(f"ERROR: Model not found at {MODEL_PATH}", flush=True)
-        sys.exit(1)
-
-    size_gb = os.path.getsize(MODEL_PATH) / (1024**3)
-    print(f"Model: {size_gb:.1f} GB", flush=True)
-
-    cmd = [
-        "llama-server",
-        "--model", MODEL_PATH,
-        "--host", SERVER_HOST,
-        "--port", str(SERVER_PORT),
-        "--n-gpu-layers", "-1",
-        "--ctx-size", "8192",
-        "--parallel", "2",
-        "--cont-batching",
-        "--flash-attn",
-        "--cache-type-k", "q8_0",
-        "--cache-type-v", "q8_0",
-        "--jinja",
-    ]
-
-    print(f"Starting llama-server...", flush=True)
-    server_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-
-    def read_output():
-        for line in server_process.stdout:
-            print(f"[llama] {line.strip()}", flush=True)
-
-    t = threading.Thread(target=read_output, daemon=True)
-    t.start()
-
-    print("Waiting for server...", flush=True)
-    for i in range(180):
-        try:
-            r = requests.get(f"http://{SERVER_HOST}:{SERVER_PORT}/health", timeout=5)
-            if r.status_code == 200:
-                print(f"Server ready after {i+1}s", flush=True)
-                break
-        except:
-            pass
-        time.sleep(1)
-    else:
-        print("Server failed to start", flush=True)
-        sys.exit(1)
-
-    print("Starting RunPod handler...", flush=True)
+    import runpod
     runpod.serverless.start({"handler": handler})

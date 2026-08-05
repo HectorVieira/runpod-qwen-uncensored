@@ -20,17 +20,13 @@ server_process = None
 
 
 def find_llama_server():
-    """Find llama-server binary"""
-    # Check common locations
     paths = ["/usr/local/bin/llama-server", "/usr/bin/llama-server", "llama-server"]
     for p in paths:
         if os.path.exists(p):
             return p
-    # Try shutil
     path = shutil.which("llama-server")
     if path:
         return path
-    # Search
     result = subprocess.run(["find", "/", "-name", "llama-server", "-type", "f"], capture_output=True, text=True, timeout=10)
     for line in result.stdout.strip().split("\n"):
         if line and os.path.exists(line):
@@ -89,7 +85,6 @@ if __name__ == "__main__":
         "--flash-attn",
         "--cache-type-k", "q8_0",
         "--cache-type-v", "q8_0",
-        "--jinja",
     ]
 
     print(f"Starting llama-server...", flush=True)

@@ -10,12 +10,32 @@ import signal
 import sys
 import os
 import threading
+import shutil
 
 MODEL_PATH = "/runpod-volume/models/qwen3.6-35b-uncensored.gguf"
 SERVER_HOST = "0.0.0.0"
 SERVER_PORT = 8080
 
 server_process = None
+
+
+def find_llama_server():
+    """Find llama-server binary"""
+    # Check common locations
+    paths = ["/usr/local/bin/llama-server", "/usr/bin/llama-server", "llama-server"]
+    for p in paths:
+        if os.path.exists(p):
+            return p
+    # Try shutil
+    path = shutil.which("llama-server")
+    if path:
+        return path
+    # Search
+    result = subprocess.run(["find", "/", "-name", "llama-server", "-type", "f"], capture_output=True, text=True, timeout=10)
+    for line in result.stdout.strip().split("\n"):
+        if line and os.path.exists(line):
+            return line
+    return None
 
 
 def handler(job):
@@ -51,8 +71,14 @@ if __name__ == "__main__":
     size_gb = os.path.getsize(MODEL_PATH) / (1024**3)
     print(f"Model: {size_gb:.1f} GB", flush=True)
 
+    llama_path = find_llama_server()
+    if not llama_path:
+        print("ERROR: llama-server not found", flush=True)
+        sys.exit(1)
+    print(f"llama-server: {llama_path}", flush=True)
+
     cmd = [
-        "llama-server",
+        llama_path,
         "--model", MODEL_PATH,
         "--host", SERVER_HOST,
         "--port", str(SERVER_PORT),

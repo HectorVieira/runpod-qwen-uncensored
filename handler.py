@@ -4,9 +4,7 @@ RunPod Serverless Handler - Qwen3.6-35B-A3B Uncensored (llama.cpp)
 import runpod
 import subprocess
 import time
-import json
 import requests
-import signal
 import sys
 import os
 import threading
@@ -57,6 +55,7 @@ def handler(job):
         return {"error": "No messages or prompt provided"}
     
     try:
+        # Always use stream=false — RunPod serverless doesn't support SSE
         payload = {
             "messages": messages,
             "max_tokens": job_input.get("max_tokens", 4096),

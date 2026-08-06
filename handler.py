@@ -20,17 +20,36 @@ server_process = None
 
 
 def find_llama_server():
-    paths = ["/usr/local/bin/llama-server", "/usr/bin/llama-server", "llama-server"]
+    """Search for llama-server binary"""
+    # Common locations
+    paths = [
+        "/usr/local/bin/llama-server",
+        "/usr/bin/llama-server",
+        "/opt/llama.cpp/build/bin/llama-server",
+        "/app/llama-server",
+        "llama-server",
+    ]
     for p in paths:
         if os.path.exists(p):
             return p
+    
+    # shutil.which
     path = shutil.which("llama-server")
     if path:
         return path
-    result = subprocess.run(["find", "/", "-name", "llama-server", "-type", "f"], capture_output=True, text=True, timeout=10)
-    for line in result.stdout.strip().split("\n"):
-        if line and os.path.exists(line):
-            return line
+    
+    # find command
+    try:
+        result = subprocess.run(
+            ["find", "/", "-name", "llama-server", "-type", "f", "-executable"],
+            capture_output=True, text=True, timeout=15
+        )
+        for line in result.stdout.strip().split("\n"):
+            if line and os.path.isfile(line) and os.access(line, os.X_OK):
+                return line
+    except:
+        pass
+    
     return None
 
 
@@ -70,6 +89,10 @@ if __name__ == "__main__":
     llama_path = find_llama_server()
     if not llama_path:
         print("ERROR: llama-server not found", flush=True)
+        # List all files in common locations
+        for d in ["/usr/local/bin", "/usr/bin", "/opt", "/app"]:
+            if os.path.exists(d):
+                print(f"  {d}: {os.listdir(d)[:10]}", flush=True)
         sys.exit(1)
     print(f"llama-server: {llama_path}", flush=True)
 

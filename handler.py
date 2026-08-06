@@ -21,7 +21,6 @@ server_process = None
 
 def find_llama_server():
     """Search for llama-server binary"""
-    # Common locations
     paths = [
         "/usr/local/bin/llama-server",
         "/usr/bin/llama-server",
@@ -33,12 +32,10 @@ def find_llama_server():
         if os.path.exists(p):
             return p
     
-    # shutil.which
     path = shutil.which("llama-server")
     if path:
         return path
     
-    # find command
     try:
         result = subprocess.run(
             ["find", "/", "-name", "llama-server", "-type", "f", "-executable"],
@@ -89,10 +86,6 @@ if __name__ == "__main__":
     llama_path = find_llama_server()
     if not llama_path:
         print("ERROR: llama-server not found", flush=True)
-        # List all files in common locations
-        for d in ["/usr/local/bin", "/usr/bin", "/opt", "/app"]:
-            if os.path.exists(d):
-                print(f"  {d}: {os.listdir(d)[:10]}", flush=True)
         sys.exit(1)
     print(f"llama-server: {llama_path}", flush=True)
 
@@ -105,7 +98,7 @@ if __name__ == "__main__":
         "--ctx-size", "4096",
         "--parallel", "1",
         "--cont-batching",
-        "--flash-attn",
+        "--flash-attn", "on",
     ]
 
     print(f"Starting llama-server...", flush=True)

@@ -1,4 +1,4 @@
-FROM ghcr.io/ggml-org/llama.cpp:full-cuda13
+FROM ghcr.io/ggml-org/llama.cpp:server-cuda
 
 # Override entrypoint
 ENTRYPOINT []

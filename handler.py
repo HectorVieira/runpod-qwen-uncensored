@@ -1,6 +1,5 @@
 """
 RunPod Serverless Handler - Qwen3.6-35B-A3B Uncensored (llama.cpp)
-Supports streaming
 """
 import runpod
 import subprocess
@@ -21,7 +20,6 @@ server_process = None
 
 
 def find_llama_server():
-    """Search for llama-server binary"""
     paths = [
         "/usr/local/bin/llama-server",
         "/usr/bin/llama-server",
@@ -32,11 +30,9 @@ def find_llama_server():
     for p in paths:
         if os.path.exists(p):
             return p
-    
     path = shutil.which("llama-server")
     if path:
         return path
-    
     try:
         result = subprocess.run(
             ["find", "/", "-name", "llama-server", "-type", "f", "-executable"],
@@ -47,7 +43,6 @@ def find_llama_server():
                 return line
     except:
         pass
-    
     return None
 
 
@@ -55,7 +50,6 @@ def handler(job):
     job_input = job.get("input", {})
     messages = job_input.get("messages", [])
     prompt = job_input.get("prompt", "")
-    stream = job_input.get("stream", False)
     
     if not messages and prompt:
         messages = [{"role": "user", "content": prompt}]
@@ -65,50 +59,21 @@ def handler(job):
     try:
         payload = {
             "messages": messages,
-            "max_tokens": job_input.get("max_tokens", 1024),
+            "max_tokens": job_input.get("max_tokens", 4096),
             "temperature": job_input.get("temperature", 0.7),
-            "stream": stream,
+            "stream": False,
         }
         
-        if stream:
-            # Streaming response
-            r = requests.post(
-                f"http://{SERVER_HOST}:{SERVER_PORT}/v1/chat/completions",
-                json=payload,
-                stream=True,
-                timeout=300
-            )
-            
-            if r.status_code != 200:
-                return {"error": f"llama-server {r.status_code}: {r.text[:200]}"}
-            
-            # Return generator for streaming
-            def generate():
-                for line in r.iter_lines():
-                    if line:
-                        decoded = line.decode('utf-8')
-                        if decoded.startswith('data: '):
-                            data = decoded[6:]
-                            if data == '[DONE]':
-                                yield 'data: [DONE]\n\n'
-                            else:
-                                yield f"data: {data}\n\n"
-            
-            return runpod.serverless.sse_stream(generate())
+        r = requests.post(
+            f"http://{SERVER_HOST}:{SERVER_PORT}/v1/chat/completions",
+            json=payload,
+            timeout=300
+        )
         
-        else:
-            # Non-streaming response
-            r = requests.post(
-                f"http://{SERVER_HOST}:{SERVER_PORT}/v1/chat/completions",
-                json=payload,
-                timeout=300
-            )
-            
-            if r.status_code != 200:
-                return {"error": f"llama-server {r.status_code}: {r.text[:200]}"}
-            
-            return r.json()
-    
+        if r.status_code != 200:
+            return {"error": f"llama-server {r.status_code}: {r.text[:200]}"}
+        
+        return r.json()
     except Exception as e:
         return {"error": str(e)}
 

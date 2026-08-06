@@ -49,7 +49,6 @@ def find_llama_server():
 def handler(job):
     job_input = job.get("input", {})
     
-    # Detect format
     openai_input = job_input.get("openai_input", {})
     if openai_input:
         messages = openai_input.get("messages", [])
@@ -87,7 +86,6 @@ def handler(job):
             return {"error": f"llama-server {r.status_code}: {r.text[:200]}"}
         
         if stream:
-            # Generator: yield SSE lines from llama-server
             for line in r.iter_lines():
                 if line:
                     yield line.decode('utf-8') + '\n\n'
@@ -125,6 +123,7 @@ if __name__ == "__main__":
         "--parallel", "1",
         "--cont-batching",
         "--flash-attn", "on",
+        "--jinja",
     ]
 
     print(f"Starting llama-server...", flush=True)

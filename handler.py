@@ -1,12 +1,14 @@
 """
 RunPod Serverless Handler - Qwen3.6-35B-A3B Uncensored (llama.cpp)
 Streams via generator when stream=true, returns JSON otherwise
+Filters special tokens from response
 """
 import runpod
 import subprocess
 import time
 import json
 import requests
+import re
 import sys
 import os
 import threading
@@ -17,6 +19,9 @@ SERVER_HOST = "0.0.0.0"
 SERVER_PORT = 8080
 
 server_process = None
+
+# Pattern to match special tokens like <tool_call>, <tool_call>, etc.
+SPECIAL_TOKEN_RE = re.compile(r'<\|[^>]*\|>')
 
 
 def find_llama_server():
@@ -44,6 +49,13 @@ def find_llama_server():
     except:
         pass
     return None
+
+
+def clean_special_tokens(text):
+    """Remove special tokens like <tool_call>, <tool_call> from text"""
+    if not text:
+        return text
+    return SPECIAL_TOKEN_RE.sub('', text).strip()
 
 
 def handler(job):
@@ -88,10 +100,32 @@ def handler(job):
         if stream:
             for line in r.iter_lines():
                 if line:
-                    yield line.decode('utf-8') + '\n\n'
+                    decoded = line.decode('utf-8')
+                    # Clean special tokens from SSE data lines
+                    if decoded.startswith('data: '):
+                        try:
+                            data = json.loads(decoded[6:])
+                            if 'choices' in data:
+                                for choice in data['choices']:
+                                    delta = choice.get('delta', {})
+                                    for key in ['content', 'reasoning_content']:
+                                        if key in delta and delta[key]:
+                                            delta[key] = clean_special_tokens(delta[key])
+                            decoded = 'data: ' + json.dumps(data)
+                        except:
+                            pass
+                    yield decoded + '\n\n'
             return
         else:
-            return r.json()
+            # Clean special tokens from non-streaming response
+            data = r.json()
+            if 'choices' in data:
+                for choice in data['choices']:
+                    msg = choice.get('message', {})
+                    for key in ['content', 'reasoning_content']:
+                        if key in msg and msg[key]:
+                            msg[key] = clean_special_tokens(msg[key])
+            return data
     
     except Exception as e:
         return {"error": str(e)}
@@ -123,7 +157,6 @@ if __name__ == "__main__":
         "--parallel", "1",
         "--cont-batching",
         "--flash-attn", "on",
-        "--jinja",
     ]
 
     print(f"Starting llama-server...", flush=True)

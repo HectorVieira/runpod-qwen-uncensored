@@ -1,10 +1,11 @@
 """
 RunPod Serverless Handler - Qwen3.6-35B-A3B Uncensored (llama.cpp)
-Handles both /runsync (input.messages) and /openai/v1 (openai_input)
+Returns SSE streaming for OpenAI-compatible endpoint
 """
 import runpod
 import subprocess
 import time
+import json
 import requests
 import sys
 import os
@@ -48,24 +49,21 @@ def find_llama_server():
 def handler(job):
     job_input = job.get("input", {})
     
-    # Support both formats:
-    # /runsync: {"input": {"messages": [...], "prompt": "..."}}
-    # /openai/v1: {"input": {"openai_route": "/v1/chat/completions", "openai_input": {"messages": [...]}}}
-    
+    # Detect format: /openai/v1 sends openai_input, /runsync sends messages/prompt
     openai_input = job_input.get("openai_input", {})
     if openai_input:
-        # OpenAI-compatible format
         messages = openai_input.get("messages", [])
         max_tokens = openai_input.get("max_tokens", 4096)
         temperature = openai_input.get("temperature", 0.7)
+        stream = openai_input.get("stream", True)
     else:
-        # RunPod native format
         messages = job_input.get("messages", [])
         prompt = job_input.get("prompt", "")
         if not messages and prompt:
             messages = [{"role": "user", "content": prompt}]
         max_tokens = job_input.get("max_tokens", 4096)
         temperature = job_input.get("temperature", 0.7)
+        stream = job_input.get("stream", False)
     
     if not messages:
         return {"error": "No messages provided"}
@@ -75,19 +73,30 @@ def handler(job):
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
-            "stream": False,
+            "stream": stream,
         }
         
         r = requests.post(
             f"http://{SERVER_HOST}:{SERVER_PORT}/v1/chat/completions",
             json=payload,
+            stream=stream,
             timeout=300
         )
         
         if r.status_code != 200:
             return {"error": f"llama-server {r.status_code}: {r.text[:200]}"}
         
-        return r.json()
+        if stream:
+            # Return generator that yields SSE lines
+            def generate():
+                for line in r.iter_lines():
+                    if line:
+                        decoded = line.decode('utf-8')
+                        yield decoded + '\n\n'
+            return generate()
+        else:
+            return r.json()
+    
     except Exception as e:
         return {"error": str(e)}
 

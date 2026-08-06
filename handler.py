@@ -1,5 +1,6 @@
 """
 RunPod Serverless Handler - Qwen3.6-35B-A3B Uncensored (llama.cpp)
+Handles both /runsync (input.messages) and /openai/v1 (openai_input)
 """
 import runpod
 import subprocess
@@ -46,20 +47,34 @@ def find_llama_server():
 
 def handler(job):
     job_input = job.get("input", {})
-    messages = job_input.get("messages", [])
-    prompt = job_input.get("prompt", "")
     
-    if not messages and prompt:
-        messages = [{"role": "user", "content": prompt}]
+    # Support both formats:
+    # /runsync: {"input": {"messages": [...], "prompt": "..."}}
+    # /openai/v1: {"input": {"openai_route": "/v1/chat/completions", "openai_input": {"messages": [...]}}}
+    
+    openai_input = job_input.get("openai_input", {})
+    if openai_input:
+        # OpenAI-compatible format
+        messages = openai_input.get("messages", [])
+        max_tokens = openai_input.get("max_tokens", 4096)
+        temperature = openai_input.get("temperature", 0.7)
+    else:
+        # RunPod native format
+        messages = job_input.get("messages", [])
+        prompt = job_input.get("prompt", "")
+        if not messages and prompt:
+            messages = [{"role": "user", "content": prompt}]
+        max_tokens = job_input.get("max_tokens", 4096)
+        temperature = job_input.get("temperature", 0.7)
+    
     if not messages:
-        return {"error": "No messages or prompt provided"}
+        return {"error": "No messages provided"}
     
     try:
-        # Always use stream=false — RunPod serverless doesn't support SSE
         payload = {
             "messages": messages,
-            "max_tokens": job_input.get("max_tokens", 4096),
-            "temperature": job_input.get("temperature", 0.7),
+            "max_tokens": max_tokens,
+            "temperature": temperature,
             "stream": False,
         }
         

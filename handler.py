@@ -1,14 +1,12 @@
 """
 RunPod Serverless Handler - Qwen3.6-35B-A3B Uncensored (llama.cpp)
-Streams via generator when stream=true, returns JSON otherwise
-Filters special tokens from response
+Disables thinking mode, streams via generator when stream=true
 """
 import runpod
 import subprocess
 import time
 import json
 import requests
-import re
 import sys
 import os
 import threading
@@ -19,9 +17,6 @@ SERVER_HOST = "0.0.0.0"
 SERVER_PORT = 8080
 
 server_process = None
-
-# Pattern to match special tokens like <tool_call>, <tool_call>, etc.
-SPECIAL_TOKEN_RE = re.compile(r'<\|[^>]*\|>')
 
 
 def find_llama_server():
@@ -51,13 +46,6 @@ def find_llama_server():
     return None
 
 
-def clean_special_tokens(text):
-    """Remove special tokens like <tool_call>, <tool_call> from text"""
-    if not text:
-        return text
-    return SPECIAL_TOKEN_RE.sub('', text).strip()
-
-
 def handler(job):
     job_input = job.get("input", {})
     
@@ -78,6 +66,12 @@ def handler(job):
     
     if not messages:
         return {"error": "No messages provided"}
+    
+    # Add /no_think to disable Qwen thinking mode
+    if messages and messages[-1].get("role") == "user":
+        last_msg = messages[-1]["content"]
+        if "/no_think" not in last_msg:
+            messages[-1]["content"] = last_msg + " /no_think"
     
     payload = {
         "messages": messages,
@@ -100,32 +94,10 @@ def handler(job):
         if stream:
             for line in r.iter_lines():
                 if line:
-                    decoded = line.decode('utf-8')
-                    # Clean special tokens from SSE data lines
-                    if decoded.startswith('data: '):
-                        try:
-                            data = json.loads(decoded[6:])
-                            if 'choices' in data:
-                                for choice in data['choices']:
-                                    delta = choice.get('delta', {})
-                                    for key in ['content', 'reasoning_content']:
-                                        if key in delta and delta[key]:
-                                            delta[key] = clean_special_tokens(delta[key])
-                            decoded = 'data: ' + json.dumps(data)
-                        except:
-                            pass
-                    yield decoded + '\n\n'
+                    yield line.decode('utf-8') + '\n\n'
             return
         else:
-            # Clean special tokens from non-streaming response
-            data = r.json()
-            if 'choices' in data:
-                for choice in data['choices']:
-                    msg = choice.get('message', {})
-                    for key in ['content', 'reasoning_content']:
-                        if key in msg and msg[key]:
-                            msg[key] = clean_special_tokens(msg[key])
-            return data
+            return r.json()
     
     except Exception as e:
         return {"error": str(e)}

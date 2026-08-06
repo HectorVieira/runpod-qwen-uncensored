@@ -1,6 +1,6 @@
 """
 RunPod Serverless Handler - Qwen3.6-35B-A3B Uncensored (llama.cpp)
-Returns SSE streaming for OpenAI-compatible endpoint
+Streams via generator when stream=true, returns JSON otherwise
 """
 import runpod
 import subprocess
@@ -49,13 +49,13 @@ def find_llama_server():
 def handler(job):
     job_input = job.get("input", {})
     
-    # Detect format: /openai/v1 sends openai_input, /runsync sends messages/prompt
+    # Detect format
     openai_input = job_input.get("openai_input", {})
     if openai_input:
         messages = openai_input.get("messages", [])
         max_tokens = openai_input.get("max_tokens", 4096)
         temperature = openai_input.get("temperature", 0.7)
-        stream = openai_input.get("stream", True)
+        stream = openai_input.get("stream", False)
     else:
         messages = job_input.get("messages", [])
         prompt = job_input.get("prompt", "")
@@ -68,14 +68,14 @@ def handler(job):
     if not messages:
         return {"error": "No messages provided"}
     
+    payload = {
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "stream": stream,
+    }
+    
     try:
-        payload = {
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "stream": stream,
-        }
-        
         r = requests.post(
             f"http://{SERVER_HOST}:{SERVER_PORT}/v1/chat/completions",
             json=payload,
@@ -87,13 +87,11 @@ def handler(job):
             return {"error": f"llama-server {r.status_code}: {r.text[:200]}"}
         
         if stream:
-            # Return generator that yields SSE lines
-            def generate():
-                for line in r.iter_lines():
-                    if line:
-                        decoded = line.decode('utf-8')
-                        yield decoded + '\n\n'
-            return generate()
+            # Generator: yield SSE lines from llama-server
+            for line in r.iter_lines():
+                if line:
+                    yield line.decode('utf-8') + '\n\n'
+            return
         else:
             return r.json()
     

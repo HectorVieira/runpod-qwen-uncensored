@@ -1,6 +1,6 @@
 """
 RunPod Serverless Handler - Qwen3.6-35B-A3B Uncensored Genesis Hermes V7
-Per official model card recommendations
+With increased timeouts for streaming
 """
 import runpod
 import subprocess
@@ -47,7 +47,6 @@ def find_llama_server():
 
 
 def build_tools_description(tools):
-    """Convert OpenAI tools to Hermes format"""
     if not tools:
         return ""
     tool_defs = []
@@ -93,9 +92,8 @@ def handler(job):
     if not messages:
         return {"error": "No messages provided"}
     
-    # Build agentic system prompt with tools schema (official model card format)
+    # Agentic system prompt with tools schema
     if tools:
-        tools_desc = build_tools_description(tools)
         schema = json.dumps({
             "type": "function",
             "functions": [
@@ -128,11 +126,12 @@ def handler(job):
     }
     
     try:
+        # Use connect timeout of 30s, read timeout of 600s (10 min)
         r = requests.post(
             f"http://{SERVER_HOST}:{SERVER_PORT}/v1/chat/completions",
             json=payload,
             stream=stream,
-            timeout=300
+            timeout=(30, 600)
         )
         
         if r.status_code != 200:

@@ -1,6 +1,6 @@
 """
 RunPod Serverless Handler - Qwen3.6-35B-A3B Uncensored Genesis Hermes V7
-NousResearch/hermes-function-calling-v1 format
+Per official model card recommendations
 """
 import runpod
 import subprocess
@@ -47,10 +47,9 @@ def find_llama_server():
 
 
 def build_tools_description(tools):
-    """Convert OpenAI tools format to Hermes function calling format"""
+    """Convert OpenAI tools to Hermes format"""
     if not tools:
         return ""
-    
     tool_defs = []
     for tool in tools:
         func = tool.get("function", {})
@@ -59,18 +58,15 @@ def build_tools_description(tools):
         params = func.get("parameters", {})
         properties = params.get("properties", {})
         required = params.get("required", [])
-        
         param_parts = []
         for pname, pinfo in properties.items():
             ptype = pinfo.get("type", "string")
             pdesc = pinfo.get("description", "")
             param_parts.append(f"  - {pname} ({ptype}): {pdesc}")
-        
         tool_def = f"## {name}\n{desc}\nParameters:\n" + "\n".join(param_parts)
         if required:
             tool_def += f"\nRequired: {', '.join(required)}"
         tool_defs.append(tool_def)
-    
     return "\n\n".join(tool_defs)
 
 
@@ -82,7 +78,7 @@ def handler(job):
         messages = openai_input.get("messages", [])
         tools = openai_input.get("tools", [])
         max_tokens = openai_input.get("max_tokens", 4096)
-        temperature = openai_input.get("temperature", 0.7)
+        temperature = openai_input.get("temperature", 0.6)
         stream = openai_input.get("stream", False)
     else:
         messages = job_input.get("messages", [])
@@ -91,28 +87,35 @@ def handler(job):
         if not messages and prompt:
             messages = [{"role": "user", "content": prompt}]
         max_tokens = job_input.get("max_tokens", 4096)
-        temperature = job_input.get("temperature", 0.7)
+        temperature = job_input.get("temperature", 0.6)
         stream = job_input.get("stream", False)
     
     if not messages:
         return {"error": "No messages provided"}
     
-    # Build system prompt with tools if provided
+    # Build agentic system prompt with tools schema (official model card format)
     if tools:
         tools_desc = build_tools_description(tools)
+        schema = json.dumps({
+            "type": "function",
+            "functions": [
+                {
+                    "name": t.get("function", {}).get("name", ""),
+                    "description": t.get("function", {}).get("description", ""),
+                    "parameters": t.get("function", {}).get("parameters", {})
+                }
+                for t in tools
+            ]
+        }, indent=2)
+        
         system_prompt = (
-            "You are a function calling AI model.\n\n"
-            "You are provided with function signatures within <tools></tools> XML tags:\n"
-            f"<tools>\n{tools_desc}\n</tools>\n\n"
-            "When a user message needs function calls, output the function call in "
-            "JSON format inside<tool_call></tool_call> XML tags:\n"
-            "<tool_call>\n{\"name\": \"function_name\", \"arguments\": {\"arg1\": \"value1\"}}\n</tool_call>\n\n"
-            "Only call functions when needed. Respond normally if no functions are required.\n"
+            "You are Qwen, a large language model created by Tongyi Lab team from Alibaba Group. "
+            "You are a helpful assistant that answers in JSON. Here's the json schema you must adhere to:\n"
+            f"<schema>\n{schema}\n</schema>."
         )
         
-        # Find and replace or add system message
         if messages and messages[0].get("role") == "system":
-            messages[0]["content"] = system_prompt + "\n" + messages[0]["content"]
+            messages[0]["content"] = system_prompt + "\n\n" + messages[0]["content"]
         else:
             messages.insert(0, {"role": "system", "content": system_prompt})
     
@@ -120,6 +123,7 @@ def handler(job):
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": temperature,
+        "top_p": 0.95,
         "stream": stream,
     }
     
@@ -172,6 +176,7 @@ if __name__ == "__main__":
         "--parallel", "1",
         "--cont-batching",
         "--flash-attn", "on",
+        "--jinja",
     ]
 
     print(f"Starting llama-server...", flush=True)

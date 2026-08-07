@@ -1,6 +1,5 @@
 """
 RunPod Serverless Handler - Qwen3.6-35B-A3B Uncensored Genesis Hermes V7
-With increased timeouts for streaming
 """
 import runpod
 import subprocess
@@ -78,7 +77,6 @@ def handler(job):
         tools = openai_input.get("tools", [])
         max_tokens = openai_input.get("max_tokens", 4096)
         temperature = openai_input.get("temperature", 0.6)
-        stream = openai_input.get("stream", False)
     else:
         messages = job_input.get("messages", [])
         tools = job_input.get("tools", [])
@@ -87,12 +85,10 @@ def handler(job):
             messages = [{"role": "user", "content": prompt}]
         max_tokens = job_input.get("max_tokens", 4096)
         temperature = job_input.get("temperature", 0.6)
-        stream = job_input.get("stream", False)
     
     if not messages:
         return {"error": "No messages provided"}
     
-    # Agentic system prompt with tools schema
     if tools:
         schema = json.dumps({
             "type": "function",
@@ -105,13 +101,11 @@ def handler(job):
                 for t in tools
             ]
         }, indent=2)
-        
         system_prompt = (
             "You are Qwen, a large language model created by Tongyi Lab team from Alibaba Group. "
             "You are a helpful assistant that answers in JSON. Here's the json schema you must adhere to:\n"
             f"<schema>\n{schema}\n</schema>."
         )
-        
         if messages and messages[0].get("role") == "system":
             messages[0]["content"] = system_prompt + "\n\n" + messages[0]["content"]
         else:
@@ -122,49 +116,34 @@ def handler(job):
         "max_tokens": max_tokens,
         "temperature": temperature,
         "top_p": 0.95,
-        "stream": stream,
+        "stream": False,
     }
     
     try:
-        # Use connect timeout of 30s, read timeout of 600s (10 min)
         r = requests.post(
             f"http://{SERVER_HOST}:{SERVER_PORT}/v1/chat/completions",
             json=payload,
-            stream=stream,
             timeout=(30, 600)
         )
-        
         if r.status_code != 200:
             return {"error": f"llama-server {r.status_code}: {r.text[:200]}"}
-        
-        if stream:
-            for line in r.iter_lines():
-                if line:
-                    yield line.decode('utf-8') + '\n\n'
-            return
-        else:
-            return r.json()
-    
+        return r.json()
     except Exception as e:
         return {"error": str(e)}
 
 
 if __name__ == "__main__":
     print("=== Handler Starting ===", flush=True)
-
     if not os.path.exists(MODEL_PATH):
         print(f"ERROR: Model not found at {MODEL_PATH}", flush=True)
         sys.exit(1)
-
     size_gb = os.path.getsize(MODEL_PATH) / (1024**3)
     print(f"Model: {size_gb:.1f} GB", flush=True)
-
     llama_path = find_llama_server()
     if not llama_path:
         print("ERROR: llama-server not found", flush=True)
         sys.exit(1)
     print(f"llama-server: {llama_path}", flush=True)
-
     cmd = [
         llama_path,
         "--model", MODEL_PATH,
@@ -177,17 +156,13 @@ if __name__ == "__main__":
         "--flash-attn", "on",
         "--jinja",
     ]
-
     print(f"Starting llama-server...", flush=True)
     server_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-
     def read_output():
         for line in server_process.stdout:
             print(f"[llama] {line.strip()}", flush=True)
-
     t = threading.Thread(target=read_output, daemon=True)
     t.start()
-
     print("Waiting for server...", flush=True)
     for i in range(180):
         try:
@@ -201,6 +176,5 @@ if __name__ == "__main__":
     else:
         print("Server failed to start", flush=True)
         sys.exit(1)
-
     print("Starting RunPod handler...", flush=True)
     runpod.serverless.start({"handler": handler})

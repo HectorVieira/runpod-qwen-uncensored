@@ -1,6 +1,6 @@
 """
 RunPod Serverless Handler - Qwen3.6-35B-A3B Uncensored (llama.cpp)
-Disables thinking mode, streams via generator when stream=true
+Hermes-style tool calling via JSON schema
 """
 import runpod
 import subprocess
@@ -17,6 +17,11 @@ SERVER_HOST = "0.0.0.0"
 SERVER_PORT = 8080
 
 server_process = None
+
+HERMES_SYSTEM_PROMPT = """You are Qwen, a large language model created by Tongyi Lab team from Alibaba Group. You are a helpful assistant that answers in JSON. Here's the json schema you must adhere to:
+<schema>
+{schema}
+</schema>"""
 
 
 def find_llama_server():
@@ -52,11 +57,13 @@ def handler(job):
     openai_input = job_input.get("openai_input", {})
     if openai_input:
         messages = openai_input.get("messages", [])
+        tools = openai_input.get("tools", [])
         max_tokens = openai_input.get("max_tokens", 4096)
         temperature = openai_input.get("temperature", 0.7)
         stream = openai_input.get("stream", False)
     else:
         messages = job_input.get("messages", [])
+        tools = job_input.get("tools", [])
         prompt = job_input.get("prompt", "")
         if not messages and prompt:
             messages = [{"role": "user", "content": prompt}]
@@ -67,11 +74,27 @@ def handler(job):
     if not messages:
         return {"error": "No messages provided"}
     
-    # Add /no_think to disable Qwen thinking mode
-    if messages and messages[-1].get("role") == "user":
-        last_msg = messages[-1]["content"]
-        if "/no_think" not in last_msg:
-            messages[-1]["content"] = last_msg + " /no_think"
+    # If tools are provided, inject JSON schema into system prompt
+    if tools:
+        schema = json.dumps({
+            "type": "function",
+            "functions": [
+                {
+                    "name": t.get("function", {}).get("name", ""),
+                    "description": t.get("function", {}).get("description", ""),
+                    "parameters": t.get("function", {}).get("parameters", {})
+                }
+                for t in tools
+            ]
+        }, indent=2)
+        
+        system_msg = HERMES_SYSTEM_PROMPT.format(schema=schema)
+        
+        # Find and replace system message, or add it
+        if messages and messages[0].get("role") == "system":
+            messages[0]["content"] = system_msg + "\n\n" + messages[0]["content"]
+        else:
+            messages.insert(0, {"role": "system", "content": system_msg})
     
     payload = {
         "messages": messages,

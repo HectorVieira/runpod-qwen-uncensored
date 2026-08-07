@@ -1,6 +1,6 @@
 """
-RunPod Serverless Handler - Qwen3.6-35B-A3B Uncensored (llama.cpp)
-Hermes-style tool calling via JSON schema
+RunPod Serverless Handler - Qwen3.6-35B-A3B Uncensored Genesis Hermes V7
+NousResearch/hermes-function-calling-v1 format
 """
 import runpod
 import subprocess
@@ -17,11 +17,6 @@ SERVER_HOST = "0.0.0.0"
 SERVER_PORT = 8080
 
 server_process = None
-
-HERMES_SYSTEM_PROMPT = """You are Qwen, a large language model created by Tongyi Lab team from Alibaba Group. You are a helpful assistant that answers in JSON. Here's the json schema you must adhere to:
-<schema>
-{schema}
-</schema>"""
 
 
 def find_llama_server():
@@ -51,6 +46,34 @@ def find_llama_server():
     return None
 
 
+def build_tools_description(tools):
+    """Convert OpenAI tools format to Hermes function calling format"""
+    if not tools:
+        return ""
+    
+    tool_defs = []
+    for tool in tools:
+        func = tool.get("function", {})
+        name = func.get("name", "")
+        desc = func.get("description", "")
+        params = func.get("parameters", {})
+        properties = params.get("properties", {})
+        required = params.get("required", [])
+        
+        param_parts = []
+        for pname, pinfo in properties.items():
+            ptype = pinfo.get("type", "string")
+            pdesc = pinfo.get("description", "")
+            param_parts.append(f"  - {pname} ({ptype}): {pdesc}")
+        
+        tool_def = f"## {name}\n{desc}\nParameters:\n" + "\n".join(param_parts)
+        if required:
+            tool_def += f"\nRequired: {', '.join(required)}"
+        tool_defs.append(tool_def)
+    
+    return "\n\n".join(tool_defs)
+
+
 def handler(job):
     job_input = job.get("input", {})
     
@@ -74,27 +97,24 @@ def handler(job):
     if not messages:
         return {"error": "No messages provided"}
     
-    # If tools are provided, inject JSON schema into system prompt
+    # Build system prompt with tools if provided
     if tools:
-        schema = json.dumps({
-            "type": "function",
-            "functions": [
-                {
-                    "name": t.get("function", {}).get("name", ""),
-                    "description": t.get("function", {}).get("description", ""),
-                    "parameters": t.get("function", {}).get("parameters", {})
-                }
-                for t in tools
-            ]
-        }, indent=2)
+        tools_desc = build_tools_description(tools)
+        system_prompt = (
+            "You are a function calling AI model.\n\n"
+            "You are provided with function signatures within <tools></tools> XML tags:\n"
+            f"<tools>\n{tools_desc}\n</tools>\n\n"
+            "When a user message needs function calls, output the function call in "
+            "JSON format inside<tool_call></tool_call> XML tags:\n"
+            "<tool_call>\n{\"name\": \"function_name\", \"arguments\": {\"arg1\": \"value1\"}}\n</tool_call>\n\n"
+            "Only call functions when needed. Respond normally if no functions are required.\n"
+        )
         
-        system_msg = HERMES_SYSTEM_PROMPT.format(schema=schema)
-        
-        # Find and replace system message, or add it
+        # Find and replace or add system message
         if messages and messages[0].get("role") == "system":
-            messages[0]["content"] = system_msg + "\n\n" + messages[0]["content"]
+            messages[0]["content"] = system_prompt + "\n" + messages[0]["content"]
         else:
-            messages.insert(0, {"role": "system", "content": system_msg})
+            messages.insert(0, {"role": "system", "content": system_prompt})
     
     payload = {
         "messages": messages,

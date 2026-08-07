@@ -10,6 +10,7 @@ import sys
 import os
 import threading
 import shutil
+import traceback
 
 MODEL_PATH = "/runpod-volume/models/qwen3.6-35b-uncensored.gguf"
 SERVER_HOST = "0.0.0.0"
@@ -69,66 +70,79 @@ def build_tools_description(tools):
 
 
 def handler(job):
-    job_input = job.get("input", {})
-    
-    openai_input = job_input.get("openai_input", {})
-    if openai_input:
-        messages = openai_input.get("messages", [])
-        tools = openai_input.get("tools", [])
-        max_tokens = openai_input.get("max_tokens", 4096)
-        temperature = openai_input.get("temperature", 0.6)
-    else:
-        messages = job_input.get("messages", [])
-        tools = job_input.get("tools", [])
-        prompt = job_input.get("prompt", "")
-        if not messages and prompt:
-            messages = [{"role": "user", "content": prompt}]
-        max_tokens = job_input.get("max_tokens", 4096)
-        temperature = job_input.get("temperature", 0.6)
-    
-    if not messages:
-        return {"error": "No messages provided"}
-    
-    if tools:
-        schema = json.dumps({
-            "type": "function",
-            "functions": [
-                {
-                    "name": t.get("function", {}).get("name", ""),
-                    "description": t.get("function", {}).get("description", ""),
-                    "parameters": t.get("function", {}).get("parameters", {})
-                }
-                for t in tools
-            ]
-        }, indent=2)
-        system_prompt = (
-            "You are Qwen, a large language model created by Tongyi Lab team from Alibaba Group. "
-            "You are a helpful assistant that answers in JSON. Here's the json schema you must adhere to:\n"
-            f"<schema>\n{schema}\n</schema>."
-        )
-        if messages and messages[0].get("role") == "system":
-            messages[0]["content"] = system_prompt + "\n\n" + messages[0]["content"]
-        else:
-            messages.insert(0, {"role": "system", "content": system_prompt})
-    
-    payload = {
-        "messages": messages,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "top_p": 0.95,
-        "stream": False,
-    }
-    
     try:
+        print(f"Handler called, job keys: {list(job.keys())}", flush=True)
+        job_input = job.get("input", {})
+        print(f"Input keys: {list(job_input.keys())}", flush=True)
+        
+        openai_input = job_input.get("openai_input", {})
+        if openai_input:
+            messages = openai_input.get("messages", [])
+            tools = openai_input.get("tools", [])
+            max_tokens = openai_input.get("max_tokens", 4096)
+            temperature = openai_input.get("temperature", 0.6)
+            print(f"OpenAI format: {len(messages)} messages, {len(tools)} tools", flush=True)
+        else:
+            messages = job_input.get("messages", [])
+            tools = job_input.get("tools", [])
+            prompt = job_input.get("prompt", "")
+            if not messages and prompt:
+                messages = [{"role": "user", "content": prompt}]
+            max_tokens = job_input.get("max_tokens", 4096)
+            temperature = job_input.get("temperature", 0.6)
+            print(f"Native format: {len(messages)} messages, prompt='{prompt[:50]}'", flush=True)
+        
+        if not messages:
+            return {"error": "No messages provided"}
+        
+        if tools:
+            schema = json.dumps({
+                "type": "function",
+                "functions": [
+                    {
+                        "name": t.get("function", {}).get("name", ""),
+                        "description": t.get("function", {}).get("description", ""),
+                        "parameters": t.get("function", {}).get("parameters", {})
+                    }
+                    for t in tools
+                ]
+            }, indent=2)
+            system_prompt = (
+                "You are Qwen, a large language model created by Tongyi Lab team from Alibaba Group. "
+                "You are a helpful assistant that answers in JSON. Here's the json schema you must adhere to:\n"
+                f"<schema>\n{schema}\n</schema>."
+            )
+            if messages and messages[0].get("role") == "system":
+                messages[0]["content"] = system_prompt + "\n\n" + messages[0]["content"]
+            else:
+                messages.insert(0, {"role": "system", "content": system_prompt})
+        
+        payload = {
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "top_p": 0.95,
+            "stream": False,
+        }
+        
+        print(f"Calling llama-server...", flush=True)
         r = requests.post(
             f"http://{SERVER_HOST}:{SERVER_PORT}/v1/chat/completions",
             json=payload,
             timeout=(30, 600)
         )
+        print(f"Response: {r.status_code}", flush=True)
+        
         if r.status_code != 200:
             return {"error": f"llama-server {r.status_code}: {r.text[:200]}"}
-        return r.json()
+        
+        result = r.json()
+        print(f"Result keys: {list(result.keys())}", flush=True)
+        return result
+    
     except Exception as e:
+        print(f"ERROR: {e}", flush=True)
+        traceback.print_exc()
         return {"error": str(e)}
 
 

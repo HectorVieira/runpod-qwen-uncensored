@@ -1,5 +1,6 @@
 """
 RunPod Serverless Handler - vLLM with Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-V6
+Uses smaller 20GB model (oQ4e) for better VRAM fit
 """
 import runpod
 import subprocess
@@ -10,20 +11,18 @@ import sys
 import os
 import threading
 
-MODEL_NAME = "symrex/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-V6-dequantized-oQ8e-mtp"
+MODEL_NAME = "symrex/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-V6-dequantized-oQ4e-mtp"
 VLLM_HOST = "0.0.0.0"
 VLLM_PORT = 8000
 
 
 def start_vllm():
-    """Start vLLM server"""
     cmd = [
         "python3", "-m", "vllm.entrypoints.openai.api_server",
         "--model", MODEL_NAME,
         "--host", VLLM_HOST,
         "--port", str(VLLM_PORT),
         "--dtype", "auto",
-        "--quantization", "fp8",
         "--max-model-len", "8192",
         "--gpu-memory-utilization", "0.9",
         "--enforce-eager",
@@ -42,8 +41,8 @@ def start_vllm():
     t = threading.Thread(target=read_output, daemon=True)
     t.start()
     
-    print("Waiting for vLLM server...", flush=True)
-    for i in range(300):  # 5 minutes timeout
+    print("Waiting for vLLM...", flush=True)
+    for i in range(300):
         try:
             r = requests.get(f"http://{VLLM_HOST}:{VLLM_PORT}/health", timeout=5)
             if r.status_code == 200:

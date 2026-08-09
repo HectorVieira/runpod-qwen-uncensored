@@ -1,13 +1,14 @@
-FROM ghcr.io/ggml-org/llama.cpp:server-cuda
+FROM runpod/pytorch:2.1.1-py3.10-cuda12.1.1-devel-ubuntu22.04
 
 # Override entrypoint
 ENTRYPOINT []
 
-# Install Python and pip
-RUN apt-get update && apt-get install -y python3 python3-pip python3-venv && rm -rf /var/lib/apt/lists/*
+# Install vLLM and dependencies
+RUN pip3 install --break-system-packages --no-cache-dir vllm requests runpod
 
-# Install Python deps
-RUN pip3 install --break-system-packages --no-cache-dir runpod requests
+# Download model on startup
+ENV HF_TOKEN=""
+ENV MODEL_NAME="symrex/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-V6-dequantized-oQ8e-mtp"
 
 # Copy handler
 COPY handler.py /handler.py

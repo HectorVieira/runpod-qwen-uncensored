@@ -1,6 +1,5 @@
 """
-RunPod Serverless Handler - vLLM with Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-V6
-Uses smaller 20GB model (oQ4e) for better VRAM fit
+RunPod Serverless Handler - vLLM with local model from network volume
 """
 import runpod
 import subprocess
@@ -11,7 +10,7 @@ import sys
 import os
 import threading
 
-MODEL_NAME = "symrex/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-V6-dequantized-oQ4e-mtp"
+MODEL_PATH = "/workspace/models/vllm-model"
 VLLM_HOST = "0.0.0.0"
 VLLM_PORT = 8000
 
@@ -19,7 +18,7 @@ VLLM_PORT = 8000
 def start_vllm():
     cmd = [
         "python3", "-m", "vllm.entrypoints.openai.api_server",
-        "--model", MODEL_NAME,
+        "--model", MODEL_PATH,
         "--host", VLLM_HOST,
         "--port", str(VLLM_PORT),
         "--dtype", "auto",
@@ -80,7 +79,7 @@ def handler(job):
         return {"error": "No messages provided"}
     
     payload = {
-        "model": MODEL_NAME,
+        "model": "default",
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": temperature,
@@ -117,7 +116,16 @@ def handler(job):
 
 if __name__ == "__main__":
     print("=== Handler Starting ===", flush=True)
-    print(f"Model: {MODEL_NAME}", flush=True)
+    print(f"Model path: {MODEL_PATH}", flush=True)
+    
+    if not os.path.exists(MODEL_PATH):
+        print(f"ERROR: Model not found at {MODEL_PATH}", flush=True)
+        sys.exit(1)
+    
+    # Check for safetensors files
+    files = os.listdir(MODEL_PATH)
+    safetensors = [f for f in files if f.endswith('.safetensors')]
+    print(f"Found {len(safetensors)} safetensors files", flush=True)
     
     if not start_vllm():
         sys.exit(1)

@@ -3,8 +3,10 @@ FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
 # Override entrypoint
 ENTRYPOINT []
 
-# Install Ollama (serves GGUF natively) and deps
-RUN curl -fsSL https://ollama.com/install.sh | sh
+# Install Ollama binary directly (no systemd, robust in containers)
+RUN curl -L -o /usr/bin/ollama https://ollama.com/download/ollama-linux-amd64 && \
+    chmod +x /usr/bin/ollama && \
+    ollama --version
 RUN pip install --no-cache-dir requests runpod
 
 # Model will be loaded from network volume at runtime

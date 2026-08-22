@@ -1,63 +1,57 @@
 """
-RunPod Serverless Handler - vLLM with local model from network volume
+RunPod Serverless Handler - Ollama serving local GGUF from network volume
 """
 import runpod
 import subprocess
 import time
 import json
 import requests
-import sys
 import os
 import threading
 
-MODEL_PATH = "/workspace/models/vllm-model"
-VLLM_HOST = "0.0.0.0"
-VLLM_PORT = 8000
+MODEL_PATH = "/workspace/models/qwen3.6-35b-uncensored.gguf"
+MODEL_NAME = "qwen35b"
+OLLAMA_HOST = "0.0.0.0"
+OLLAMA_PORT = 11434
 
+MODELFILE = f"FROM {MODEL_PATH}\nPARAMETER num_ctx 32768\nPARAMETER num_gpu 99\nPARAMETER temperature 0.7\nPARAMETER top_p 0.9\n"
 
-def start_vllm():
-    cmd = [
-        "python3", "-m", "vllm.entrypoints.openai.api_server",
-        "--model", MODEL_PATH,
-        "--host", VLLM_HOST,
-        "--port", str(VLLM_PORT),
-        "--dtype", "auto",
-        "--max-model-len", "8192",
-        "--gpu-memory-utilization", "0.9",
-        "--enforce-eager",
-        "--trust-remote-code",
-        "--tool-call-parser", "hermes",
-        "--enable-auto-tool-choice",
-    ]
-    
-    print(f"Starting vLLM...", flush=True)
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-    
+def start_ollama():
+    # inicia o ollama serve
+    print("Starting Ollama serve...", flush=True)
+    srv = subprocess.Popen(
+        ["ollama", "serve"],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
+    )
     def read_output():
-        for line in process.stdout:
-            print(f"[vllm] {line.strip()}", flush=True)
-    
-    t = threading.Thread(target=read_output, daemon=True)
-    t.start()
-    
-    print("Waiting for vLLM...", flush=True)
+        for line in srv.stdout:
+            print(f"[ollama] {line.strip()}", flush=True)
+    threading.Thread(target=read_output, daemon=True).start()
+    time.sleep(5)
+    # cria o modelo a partir do gguf
+    print("Creating Ollama model from GGUF...", flush=True)
+    try:
+        subprocess.run(["ollama", "create", MODEL_NAME, "-f", "-"],
+                       input=MODELFILE.encode(), timeout=600, check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"ollama create failed: {e}", flush=True)
+        return False
+    # espera saude
+    print("Waiting for Ollama...", flush=True)
     for i in range(300):
         try:
-            r = requests.get(f"http://{VLLM_HOST}:{VLLM_PORT}/health", timeout=5)
+            r = requests.get(f"http://{OLLAMA_HOST}:{OLLAMA_PORT}/api/tags", timeout=5)
             if r.status_code == 200:
-                print(f"vLLM ready after {i+1}s", flush=True)
+                print(f"Ollama ready after {i+1}s", flush=True)
                 return True
         except:
             pass
         time.sleep(1)
-    
-    print("vLLM failed to start", flush=True)
+    print("Ollama failed to start", flush=True)
     return False
-
 
 def handler(job):
     job_input = job.get("input", {})
-    
     openai_input = job_input.get("openai_input", {})
     if openai_input:
         messages = openai_input.get("messages", [])
@@ -74,61 +68,32 @@ def handler(job):
         max_tokens = job_input.get("max_tokens", 4096)
         temperature = job_input.get("temperature", 0.6)
         stream = job_input.get("stream", False)
-    
+
     if not messages:
         return {"error": "No messages provided"}
-    
+
     payload = {
-        "model": "default",
+        "model": MODEL_NAME,
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": temperature,
-        "top_p": 0.95,
         "stream": stream,
     }
-    
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
-    
+
     try:
         r = requests.post(
-            f"http://{VLLM_HOST}:{VLLM_PORT}/v1/chat/completions",
-            json=payload,
-            stream=stream,
-            timeout=(30, 600)
+            f"http://{OLLAMA_HOST}:{OLLAMA_PORT}/v1/chat/completions",
+            json=payload, timeout=300
         )
-        
-        if r.status_code != 200:
-            return {"error": f"vLLM {r.status_code}: {r.text[:200]}"}
-        
-        if stream:
-            for line in r.iter_lines():
-                if line:
-                    yield line.decode('utf-8') + '\n\n'
-            return
-        else:
-            return r.json()
-    
+        return r.json()
     except Exception as e:
         return {"error": str(e)}
 
-
 if __name__ == "__main__":
-    print("=== Handler Starting ===", flush=True)
-    print(f"Model path: {MODEL_PATH}", flush=True)
-    
-    if not os.path.exists(MODEL_PATH):
-        print(f"ERROR: Model not found at {MODEL_PATH}", flush=True)
-        sys.exit(1)
-    
-    # Check for safetensors files
-    files = os.listdir(MODEL_PATH)
-    safetensors = [f for f in files if f.endswith('.safetensors')]
-    print(f"Found {len(safetensors)} safetensors files", flush=True)
-    
-    if not start_vllm():
-        sys.exit(1)
-    
-    print("Starting RunPod handler...", flush=True)
-    runpod.serverless.start({"handler": handler})
+    if start_ollama():
+        runpod.serverless.start({"handler": handler})
+    else:
+        print("FATAL: Ollama did not start", flush=True)

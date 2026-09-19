@@ -27,6 +27,22 @@ A imagem base é a oficial `ghcr.io/ggml-org/llama.cpp:server-cuda`, **pinada em
 | `handler.py` | Handler serverless, provisiona o modelo e supervisiona o `llama-server` |
 | `.dockerignore` | Exclui lixo do contexto de build |
 
+## ⚠️ O contexto é a causa nº 1 de stream vazio
+
+Quando o prompt ultrapassa o `CTX_SIZE`, o `llama-server` rejeita a requisição e o gateway do RunPod **fecha o stream sem nenhum chunk**, com HTTP 200. O cliente vê exatamente `Stream ended without finish_reason`, com 0 tokens — parece problema de rede, mas é contexto estourado. Medido:
+
+| Contexto enviado | Resultado |
+|---|---|
+| ~8.000 tokens | ✅ `finish=stop` |
+| ~24.000 tokens | ✅ `finish=stop` |
+| ~31.000 tokens | ✅ `finish=stop` |
+| **~40.000 tokens** | ❌ HTTP 200, **0 chunks**, 0,7 s |
+| ~60.000 tokens | ❌ HTTP 200, **0 chunks**, 1,2 s |
+
+Sessões longas de agente estouram isso rápido: uma sessão real de DSH chegou a **153.539 caracteres ≈ 38.400 tokens** depois de 44 chamadas de ferramenta, e a partir daí toda requisição falhava em rajadas de 6 tentativas.
+
+O default é `CTX_SIZE=131072` (128k). O modelo suporta 262.144 nativamente; o teto prático é a VRAM para o KV cache. Se o `llama-server` não subir com 128k, baixe para 65536 — o supervisor reporta o motivo em `status`.
+
 ## Modelo
 
 Origem: `OBLITERATUS/Qwen3.8-27B-OBLITERATED` (público, sem gating, Apache 2.0).

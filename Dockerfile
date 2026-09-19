@@ -71,6 +71,7 @@ ENV MODEL_DIR=/runpod-volume/models \
     GPU_LAYERS=99 \
     LOAD_MODE=mmap \
     REPEAT_PENALTY=1.15 \
+    REASONING=off \
     LLAMA_HOST=127.0.0.1 \
     LLAMA_PORT=8080 \
     SERVER_START_TIMEOUT=900

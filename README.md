@@ -46,6 +46,21 @@ O default é **Q6_K (22,4 GB)** num volume de 40 GB: um segundo modelo desse por
 
 O card do OBLITERATED é enfático: sem `repetition_penalty` a decodificação greedy degenera repetindo imports e boilerplate, e em uso agêntico o modelo entra em loop de tool call. O `Dockerfile` já traz `REPEAT_PENALTY=1.15`. O card também recomenda `temperature 0` (0,1–0,3 em uso agêntico); como isso é por request, quem controla é o cliente.
 
+### ⚠️ `REASONING=off` por padrão
+
+O modelo é de raciocínio e, com thinking ligado, gasta o orçamento inteiro em `reasoning_content` **antes** de escrever qualquer `content`. Medido:
+
+| Prompt | max_tokens | finish_reason | content | reasoning |
+|---|---|---|---|---|
+| Árvore binária completa | 300 | `length` | **0 chars** | 300 tokens |
+| Árvore binária completa | 1200 | `length` | **0 chars** | 1200 tokens |
+| Árvore binária completa | 3000 | `stop` | 4097 chars | — |
+| Curto (palíndromo) | 300 | `stop` | 72 chars | 289 chars |
+
+Ou seja: em prompt de código real, uma resposta com teto modesto volta **vazia**. Num harness de agente isso é pior que lento — parece que o modelo travou.
+
+O default do `Dockerfile` é `REASONING=off`, que o próprio card do OBLITERATED recomenda ("enable_thinking OFF (recommended)"). Com ele o modelo responde direto, com `reasoning_content` vazio e `content` imediato. Se quiser raciocínio de volta, é só trocar para `REASONING=on` — mas então garanta `max_tokens` alto (3000+) no cliente.
+
 ### ⚠️ O template do GGUF não suporta tools
 
 O template embutido no GGUF do OBLITERATED tem **506 caracteres e não implementa tool calling** — o `/props` do llama-server reporta `supports_tools: false` e `supports_tool_calls: false`. Na prática o modelo responde de memória em vez de chamar a ferramenta (cheguei a vê-lo inventar um clima para Recife). Esse mesmo template força `<think>\n\n</think>` vazio, desligando o raciocínio.

@@ -76,5 +76,8 @@ ENV MODEL_DIR=/runpod-volume/models \
     SERVER_START_TIMEOUT=900
 
 COPY handler.py /handler.py
+# The GGUF's own template has no tool support; this one does.
+COPY chat_template_qwen38.jinja /app/chat_template_qwen38.jinja
+ENV CHAT_TEMPLATE_FILE=/app/chat_template_qwen38.jinja
 
 CMD ["python3", "-u", "/handler.py"]

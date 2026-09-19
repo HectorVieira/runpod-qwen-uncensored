@@ -101,6 +101,10 @@ PARALLEL = os.environ.get("PARALLEL", "").strip()      # concurrent slots
 # greedy decoding degenerates into repeating imports/boilerplate, and agent
 # harnesses get stuck in tool-call loops.
 REPEAT_PENALTY = os.environ.get("REPEAT_PENALTY", "").strip()
+# Overrides the chat template embedded in the GGUF. The OBLITERATED GGUF ships a
+# 506-character template with no tool support at all, which silently disables
+# function calling; the official Qwen3.8 template restores it.
+CHAT_TEMPLATE_FILE = os.environ.get("CHAT_TEMPLATE_FILE", "").strip()
 
 # Escape hatch for flags this file does not model explicitly.
 EXTRA_ARGS = shlex.split(os.environ.get("LLAMA_EXTRA_ARGS", ""))
@@ -240,6 +244,8 @@ def build_command():
         cmd += ["--parallel", PARALLEL]
     if REPEAT_PENALTY:
         cmd += ["--repeat-penalty", REPEAT_PENALTY]
+    if CHAT_TEMPLATE_FILE and os.path.isfile(CHAT_TEMPLATE_FILE):
+        cmd += ["--chat-template-file", CHAT_TEMPLATE_FILE]
     cmd += EXTRA_ARGS
     return cmd
 

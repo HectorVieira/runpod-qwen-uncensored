@@ -46,6 +46,12 @@ O default é **Q6_K (22,4 GB)** num volume de 40 GB: um segundo modelo desse por
 
 O card do OBLITERATED é enfático: sem `repetition_penalty` a decodificação greedy degenera repetindo imports e boilerplate, e em uso agêntico o modelo entra em loop de tool call. O `Dockerfile` já traz `REPEAT_PENALTY=1.15`. O card também recomenda `temperature 0` (0,1–0,3 em uso agêntico); como isso é por request, quem controla é o cliente.
 
+### ⚠️ O template do GGUF não suporta tools
+
+O template embutido no GGUF do OBLITERATED tem **506 caracteres e não implementa tool calling** — o `/props` do llama-server reporta `supports_tools: false` e `supports_tool_calls: false`. Na prática o modelo responde de memória em vez de chamar a ferramenta (cheguei a vê-lo inventar um clima para Recife). Esse mesmo template força `<think>\n\n</think>` vazio, desligando o raciocínio.
+
+A correção é o **template oficial do Qwen3.8-27B** (8952 chars, com tools), versionado aqui como `chat_template_qwen38.jinja` e aplicado via `--chat-template-file`. Como a abliteração preservou a capacidade do modelo (MMLU −2,1pp do stock), o que faltava era só o template.
+
 ### Como trocar de modelo
 
 O volume de 40 GB comporta **um** modelo desses, então trocar exige liberar espaço primeiro:
@@ -101,6 +107,7 @@ Todas configuráveis no endpoint, sem rebuild.
 | `REASONING` | *(vazio)* | `on\|off\|auto`. Use `off` para desligar o modo de raciocínio e ganhar latência |
 | `PARALLEL` | *(vazio)* | Slots concorrentes do llama-server. Útil porque `workersMax=1` |
 | `REPEAT_PENALTY` | `1.15` | Obrigatório para o OBLITERATED: sem ele a decodificação entra em loop |
+| `CHAT_TEMPLATE_FILE` | `/app/chat_template_qwen38.jinja` | Substitui o template do GGUF, que não tem tools |
 | `SERVER_START_TIMEOUT` | `900` | Segundos aguardando o `/health` |
 | `LLAMA_EXTRA_ARGS` | *(vazio)* | Flags extras não modeladas acima |
 | `LLAMA_SERVER_BIN` | `/app/llama-server` | Binário na imagem |

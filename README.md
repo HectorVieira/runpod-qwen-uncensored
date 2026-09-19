@@ -1,6 +1,6 @@
-# Qwen3.6-35B-A3B Uncensored — RunPod Serverless (llama.cpp)
+# Qwen3.8-27B OBLITERATED — RunPod Serverless (llama.cpp)
 
-Worker serverless que serve o GGUF **Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes** com `llama-server` (llama.cpp).
+Worker serverless que serve o GGUF **Qwen3.8-27B-OBLITERATED** (abliterated, uncensored) com `llama-server` (llama.cpp).
 
 ```
 RunPod Endpoint
@@ -29,22 +29,41 @@ A imagem base é a oficial `ghcr.io/ggml-org/llama.cpp:server-cuda`, **pinada em
 
 ## Modelo
 
-Origem: `LuffyTheFox/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-V6-GGUF` (público, sem gating).
+Origem: `OBLITERATUS/Qwen3.8-27B-OBLITERATED` (público, sem gating, Apache 2.0).
+
+Base **Qwen/Qwen3.8-27B** com abliteração iterativa (V3). O card reporta MMLU 82,3% (−2,1pp do stock), 20/20 em geração de código e 7/8 em tarefas agênticas — paridade com o modelo stock. Recusa e desvio: 0%, auditados manualmente pelo autor.
 
 | Arquivo (`MODEL_FILE`) | Tamanho | VRAM sugerida |
 |---|---|---|
-| `Hermes3.6-35B-A3B-Uncensored-Genesis-Final-APEX-Compact.gguf` | 17,4 GB | 24 GB+ |
-| `Hermes3.6-35B-A3B-Uncensored-Genesis-Final-MTP-APEX-Compact.gguf` | 18,3 GB | 24 GB+ |
-| `Hermes3.6-35B-A3B-Uncensored-Genesis-Final-APEX.gguf` | 25,8 GB | 32 GB+ |
-| `Hermes3.6-35B-A3B-Uncensored-Genesis-Final-MTP-APEX.gguf` | 26,7 GB | 32 GB+ |
-| `Hermes3.6-35B-A3B-Uncensored-Genesis-Final-Q8_K_P.gguf` | 43,6 GB | 48 GB+ |
-| `mmproj-Hermes3.6-35B-A3B-Uncensored-Genesis.gguf` | 0,9 GB | opcional (visão) |
+| `Qwen3.8-27B-OBLITERATED-Q4_K_M.gguf` | 16,8 GB | 24 GB+ |
+| `Qwen3.8-27B-OBLITERATED-Q5_K_M.gguf` | 19,5 GB | 32 GB+ |
+| **`Qwen3.8-27B-OBLITERATED-Q6_K.gguf`** | **22,4 GB** | **32 GB+ (default)** |
+| `Qwen3.8-27B-OBLITERATED-Q8_0.gguf` | 29,1 GB | 48 GB+ |
 
-O **default é `APEX` (25,8 GB)**, dimensionado para este endpoint: 48 GB de VRAM e volume de 40 GB. Sobram ~22 GB para KV cache, o que acomoda `CTX_SIZE=32768` com folga.
+O default é **Q6_K (22,4 GB)** num volume de 40 GB: um segundo modelo desse porte não cabe ao lado.
 
-**`Q8_K_P` (43,6 GB) não cabe** no volume de 40 GB — exigiria aumentar o volume primeiro.
+### ⚠️ `REPEAT_PENALTY=1.15` é obrigatório
 
-O `MTP` **é** suportado pelo llama.cpp (`--spec-type draft-mtp`), mas **não habilite**: há bug aberto de carregamento com `-ngl` em GPU única ([issue #29044](https://github.com/ggml-org/llama.cpp/issues/29044), aberto um dia antes do build pinado) e regressão de ~57× no prefill ([#28790](https://github.com/ggml-org/llama.cpp/issues/28790)). Por isso o default é o arquivo **sem** MTP.
+O card do OBLITERATED é enfático: sem `repetition_penalty` a decodificação greedy degenera repetindo imports e boilerplate, e em uso agêntico o modelo entra em loop de tool call. O `Dockerfile` já traz `REPEAT_PENALTY=1.15`. O card também recomenda `temperature 0` (0,1–0,3 em uso agêntico); como isso é por request, quem controla é o cliente.
+
+### Como trocar de modelo
+
+O volume de 40 GB comporta **um** modelo desses, então trocar exige liberar espaço primeiro:
+
+```bash
+# 1. remove outros *.gguf do volume (nunca o configurado)
+curl -X POST .../runsync -d '{"input":{"command":"cleanup"}}'
+# 2. baixa o novo explicitamente, ou deixe o boot baixar sozinho
+curl -X POST .../runsync -d '{"input":{"command":"download"}}'
+```
+
+O `cleanup` só remove `*.gguf` que sejam filhos diretos de `MODEL_DIR` e cujo nome difira de `MODEL_FILE`: nunca recursa, nunca toca em não-GGUF, nunca apaga o modelo configurado. O comando `status` informa `disk_free_gb` para você conferir antes.
+
+### Por que não o Qwen3.6-35B-A3B anterior
+
+Ele era bem mais rápido — MoE de 3B ativos, **173 tok/s medidos** — mas de uma geração anterior e sem fine-tune de código. Nos benchmarks oficiais do Qwen, o Qwen3.8-27B supera o Qwen3.6-27B em código agêntico por margem grande: **QwenSWEBench 79,0 vs 49,3** e **DeepSWE 42,2 vs 13,3**. O custo da troca é velocidade: um 27B denso fica na casa de 35–50 tok/s.
+
+O `MTP` **é** suportado pelo llama.cpp (`--spec-type draft-mtp`), mas **não habilite**: há bug aberto de carregamento com `-ngl` em GPU única ([issue #29044](https://github.com/ggml-org/llama.cpp/issues/29044), aberto um dia antes do build pinado) e regressão de ~57× no prefill ([#28790](https://github.com/ggml-org/llama.cpp/issues/28790)). Use sempre o quant **sem** MTP.
 
 ## Flags do llama-server
 
@@ -69,9 +88,9 @@ Todas configuráveis no endpoint, sem rebuild.
 | Variável | Default | Descrição |
 |---|---|---|
 | `MODEL_DIR` | `/runpod-volume/models` | Onde o GGUF fica. **Serverless monta o volume em `/runpod-volume`**, não em `/workspace`. |
-| `MODEL_REPO` | `LuffyTheFox/...Hermes-V6-GGUF` | Repo do HuggingFace |
-| `MODEL_FILE` | `...APEX-Compact.gguf` | Arquivo a servir |
-| `MODEL_ALIAS` | `qwen3.6-35b-uncensored` | Nome do modelo nas respostas |
+| `MODEL_REPO` | `OBLITERATUS/Qwen3.8-27B-OBLITERATED` | Repo do HuggingFace |
+| `MODEL_FILE` | `...Q6_K.gguf` | Arquivo a servir |
+| `MODEL_ALIAS` | `qwen3.8-27b-obliterated` | Nome do modelo nas respostas |
 | `MODEL_AUTO_DOWNLOAD` | `1` | Baixa o GGUF no primeiro boot se estiver faltando |
 | `MMPROJ_FILE` | *(vazio)* | Preencha com `mmproj-...gguf` para habilitar visão |
 | `CTX_SIZE` | `32768` | Contexto. Valores altos consomem VRAM no KV cache |
@@ -81,6 +100,7 @@ Todas configuráveis no endpoint, sem rebuild.
 | `FLASH_ATTN` | *(vazio)* | `on\|off\|auto`. Vazio deixa o default do build (`auto`) |
 | `REASONING` | *(vazio)* | `on\|off\|auto`. Use `off` para desligar o modo de raciocínio e ganhar latência |
 | `PARALLEL` | *(vazio)* | Slots concorrentes do llama-server. Útil porque `workersMax=1` |
+| `REPEAT_PENALTY` | `1.15` | Obrigatório para o OBLITERATED: sem ele a decodificação entra em loop |
 | `SERVER_START_TIMEOUT` | `900` | Segundos aguardando o `/health` |
 | `LLAMA_EXTRA_ARGS` | *(vazio)* | Flags extras não modeladas acima |
 | `LLAMA_SERVER_BIN` | `/app/llama-server` | Binário na imagem |
@@ -172,7 +192,7 @@ Use a **RunPod API key** como chave (não é uma chave OpenAI):
 curl https://api.runpod.ai/v2/968l6bh7yree8t/openai/v1/chat/completions \
   -H "Authorization: Bearer $RUNPOD_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"model": "qwen3.6-35b-uncensored",
+  -d '{"model": "qwen3.8-27b-obliterated",
        "messages": [{"role": "user", "content": "Ola"}],
        "max_tokens": 512, "stream": true}'
 ```
@@ -180,7 +200,7 @@ curl https://api.runpod.ai/v2/968l6bh7yree8t/openai/v1/chat/completions \
 Duas restrições do gateway, verificadas experimentalmente:
 
 - **`stream: true` é obrigatório.** Sem ele o gateway responde `500` — ele só retransmite Server-Sent Events. É por isso que o handler é um gerador assíncrono.
-- `GET /v1/models` funciona, mas clientes que dependem dele para descobrir modelos devem usar o alias exato `qwen3.6-35b-uncensored`.
+- `GET /v1/models` funciona, mas clientes que dependem dele para descobrir modelos devem usar o alias exato `qwen3.8-27b-obliterated`.
 
 Para configurar no **DeepSeek Harness** (Settings → Models → Add a custom provider):
 
@@ -189,7 +209,7 @@ Para configurar no **DeepSeek Harness** (Settings → Models → Add a custom pr
 | Endpoint | `https://api.runpod.ai/v2/968l6bh7yree8t/openai/v1` |
 | API protocol | `openai-completions` |
 | API key | a RunPod API key |
-| Model ID | `qwen3.6-35b-uncensored` |
+| Model ID | `qwen3.8-27b-obliterated` |
 
 
 ## Troubleshooting

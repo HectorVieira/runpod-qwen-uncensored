@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 #
-# RunPod Serverless worker: uncensored Qwen3.6-35B-A3B GGUF served by llama.cpp.
+# RunPod Serverless worker: uncensored Qwen3.8-27B-OBLITERATED GGUF served by llama.cpp.
 #
 # Why the official llama.cpp CUDA image instead of Ollama/vLLM:
 #   * llama-server mmap()s the GGUF straight off the network volume, so a cold
@@ -63,13 +63,14 @@ ENV LD_LIBRARY_PATH=/app \
 # Serverless network volumes are mounted at /runpod-volume (NOT /workspace,
 # which is the Pod convention).
 ENV MODEL_DIR=/runpod-volume/models \
-    MODEL_REPO=LuffyTheFox/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-V6-GGUF \
-    MODEL_FILE=Hermes3.6-35B-A3B-Uncensored-Genesis-Final-APEX.gguf \
-    MODEL_ALIAS=qwen3.6-35b-uncensored \
+    MODEL_REPO=OBLITERATUS/Qwen3.8-27B-OBLITERATED \
+    MODEL_FILE=Qwen3.8-27B-OBLITERATED-Q6_K.gguf \
+    MODEL_ALIAS=qwen3.8-27b-obliterated \
     MODEL_AUTO_DOWNLOAD=1 \
     CTX_SIZE=32768 \
     GPU_LAYERS=99 \
     LOAD_MODE=mmap \
+    REPEAT_PENALTY=1.15 \
     LLAMA_HOST=127.0.0.1 \
     LLAMA_PORT=8080 \
     SERVER_START_TIMEOUT=900

@@ -1,5 +1,5 @@
 """
-RunPod Serverless handler: uncensored Qwen3.6-35B-A3B GGUF served by llama.cpp.
+RunPod Serverless handler: uncensored Qwen3.8-27B-OBLITERATED GGUF served by llama.cpp.
 
 Architecture
 ------------
@@ -33,9 +33,10 @@ Job inputs accepted:
     {"input": {"openai_route": "/v1/models"}}       # bare route -> GET
     {"input": {"messages": [...]}}                  # short form
     {"input": {"prompt": "..."}}                    # single user turn
-    {"input": {"command": "status"}}                # readiness / download report
+    {"input": {"command": "status"}}                # readiness / download / disk report
     {"input": {"command": "props"}}                 # chat template + capabilities
     {"input": {"command": "download"}}              # force model fetch, blocking
+    {"input": {"command": "cleanup"}}               # delete other *.gguf from the volume
 
 Extra sampling/tool fields (temperature, top_p, max_tokens, tools, stop, ...)
 are forwarded to llama-server.
@@ -48,6 +49,7 @@ object. That is inherent to the streaming contract, not a choice made here.
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import threading
 import time
@@ -62,11 +64,11 @@ import runpod
 MODEL_DIR = os.environ.get("MODEL_DIR", "/runpod-volume/models")
 MODEL_REPO = os.environ.get(
     "MODEL_REPO",
-    "LuffyTheFox/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-V6-GGUF",
+    "OBLITERATUS/Qwen3.8-27B-OBLITERATED",
 )
 MODEL_FILE = os.environ.get(
     "MODEL_FILE",
-    "Hermes3.6-35B-A3B-Uncensored-Genesis-Final-APEX.gguf",
+    "Qwen3.8-27B-OBLITERATED-Q6_K.gguf",
 )
 # Optional multimodal projector; leave empty to serve text-only.
 MMPROJ_FILE = os.environ.get("MMPROJ_FILE", "").strip()
@@ -81,7 +83,7 @@ LLAMA_HOST = os.environ.get("LLAMA_HOST", "127.0.0.1").strip()
 LLAMA_PORT = int(os.environ.get("LLAMA_PORT", "8080"))
 SERVER_START_TIMEOUT = int(os.environ.get("SERVER_START_TIMEOUT", "900"))
 SERVER_BIN = os.environ.get("LLAMA_SERVER_BIN", "/app/llama-server")
-MODEL_ALIAS = os.environ.get("MODEL_ALIAS", "qwen3.6-35b-uncensored")
+MODEL_ALIAS = os.environ.get("MODEL_ALIAS", "qwen3.8-27b-obliterated")
 
 # Optional knobs: empty means "do not pass the flag", so the pinned build's own
 # default applies. llama-server validates the value and aborts loudly on a bad
@@ -95,6 +97,10 @@ LOAD_MODE = os.environ.get("LOAD_MODE", "").strip()    # auto|none|mmap|mlock|mm
 FLASH_ATTN = os.environ.get("FLASH_ATTN", "").strip()  # on|off|auto  (value MANDATORY)
 REASONING = os.environ.get("REASONING", "").strip()    # on|off|auto
 PARALLEL = os.environ.get("PARALLEL", "").strip()      # concurrent slots
+# The OBLITERATED model card is explicit that this is mandatory: without it,
+# greedy decoding degenerates into repeating imports/boilerplate, and agent
+# harnesses get stuck in tool-call loops.
+REPEAT_PENALTY = os.environ.get("REPEAT_PENALTY", "").strip()
 
 # Escape hatch for flags this file does not model explicitly.
 EXTRA_ARGS = shlex.split(os.environ.get("LLAMA_EXTRA_ARGS", ""))
@@ -232,6 +238,8 @@ def build_command():
         cmd += ["--reasoning", REASONING]
     if PARALLEL:
         cmd += ["--parallel", PARALLEL]
+    if REPEAT_PENALTY:
+        cmd += ["--repeat-penalty", REPEAT_PENALTY]
     cmd += EXTRA_ARGS
     return cmd
 
@@ -320,6 +328,61 @@ def _openai_error(message, err_type="worker_error"):
     return {"error": {"message": str(message), "type": err_type, "code": None}}
 
 
+def _disk_payload():
+    """Space on the volume holding the models; two of these GGUFs do not fit."""
+    target = MODEL_DIR if os.path.isdir(MODEL_DIR) else "/"
+    try:
+        u = shutil.disk_usage(target)
+        return {
+            "disk_total_gb": round(u.total / 1e9, 2),
+            "disk_used_gb": round(u.used / 1e9, 2),
+            "disk_free_gb": round(u.free / 1e9, 2),
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {"disk_error": str(exc)}
+
+
+def _cleanup_other_models():
+    """Delete every *.gguf in MODEL_DIR except the configured MODEL_FILE.
+
+    Deliberately explicit and narrow: only a direct child of MODEL_DIR, only
+    *.gguf, never the configured model. It exists because the network volume is
+    smaller than two of these models, so swapping means removing the old one
+    first. Reports what it freed rather than failing silently.
+    """
+    removed, freed = [], 0
+    errors = []
+    try:
+        names = sorted(os.listdir(MODEL_DIR))
+    except Exception as exc:  # noqa: BLE001
+        return {"cleanup_error": f"cannot list {MODEL_DIR}: {exc}"}
+
+    for name in names:
+        path = os.path.join(MODEL_DIR, name)
+        if not name.lower().endswith(".gguf") or name == MODEL_FILE:
+            continue
+        if not os.path.isfile(path):
+            continue
+        try:
+            size = os.path.getsize(path)
+            os.remove(path)
+            removed.append(name)
+            freed += size
+            log(f"cleanup: removed {name} ({size / 1e9:.2f} GB)")
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{name}: {exc}")
+
+    payload = {
+        "removed": removed,
+        "freed_gb": round(freed / 1e9, 2),
+        "kept": MODEL_FILE,
+    }
+    if errors:
+        payload["cleanup_error"] = "; ".join(errors)
+    payload.update(_disk_payload())
+    return payload
+
+
 def _status_payload():
     with _lock:
         ready = _state["ready"]
@@ -332,6 +395,7 @@ def _status_payload():
         "model_present": os.path.isfile(MODEL_PATH),
         "downloading": downloading,
     }
+    payload.update(_disk_payload())
     if error:
         payload["error"] = error
     if not ready and not error:
@@ -438,12 +502,18 @@ async def handler(job):
     if command == "props":
         yield await _request_json("/props", "GET", None)
         return
+    if command == "cleanup":
+        yield _cleanup_other_models()
+        return
     if command == "download":
         try:
             _download_model()
+            with _lock:
+                _state["error"] = None
         except Exception as exc:  # noqa: BLE001
             with _lock:
                 _state["error"] = f"model download failed: {exc}"
+            log(f"Download failed: {exc}")
         yield _status_payload()
         return
 

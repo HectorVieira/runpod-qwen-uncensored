@@ -306,18 +306,35 @@ def start_server():
 
 
 def supervise():
-    """Restart llama-server if it dies, so a long-lived worker self-heals."""
+    """Keep llama-server running, and start it once the model is available.
+
+    This must run unconditionally. When the model is missing at boot,
+    start_server() returns immediately without ever launching anything, so
+    without this thread a worker would answer "not ready" forever even after a
+    download completed -- the supervisor is the only thing that brings the
+    server up in that case.
+    """
     while True:
         time.sleep(10)
         with _lock:
             proc = _state["proc"]
-        if proc is None:
+            ready = _state["ready"]
+            downloading = _state["downloading"]
+
+        if ready or downloading:
             continue
-        if proc.poll() is not None:
-            log(f"llama-server died (code {proc.returncode}); restarting")
-            with _lock:
-                _state["ready"] = False
-            start_server()
+        if proc is not None and proc.poll() is None:
+            continue  # alive; start_server is already waiting on its health
+        if not os.path.isfile(MODEL_PATH):
+            continue  # nothing to serve yet
+
+        if proc is None:
+            log("llama-server was never started; starting it now")
+        else:
+            log(f"llama-server is gone (code {proc.returncode}); restarting")
+        with _lock:
+            _state["ready"] = False
+        start_server()
 
 
 # --------------------------------------------------------------------------- #
@@ -547,11 +564,15 @@ async def handler(job):
 if __name__ == "__main__":
     log(f"Model path: {MODEL_PATH}")
     if start_server():
-        threading.Thread(target=supervise, daemon=True).start()
+        log("Serving.")
     else:
-        # Keep the worker alive so /run can report *why* it is unhealthy rather
-        # than the endpoint dying with no diagnosable output.
-        log(f"FATAL: {_state['error']}")
+        # Not fatal: the model may simply not be downloaded yet. The supervisor
+        # below retries as soon as it appears, and `status` reports why.
+        log(f"Initial start incomplete: {_state['error']}")
+
+    # Always supervise, even after a failed initial start -- otherwise a model
+    # fetched later would never be served by this worker.
+    threading.Thread(target=supervise, daemon=True).start()
 
     # return_aggregate_stream keeps every yielded chunk in the final job result
     # instead of dropping them, so a non-streaming caller still receives the

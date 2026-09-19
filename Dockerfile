@@ -20,6 +20,15 @@ FROM ${LLAMA_CPP_IMAGE}
 ENTRYPOINT []
 USER root
 
+# The base image ships HEALTHCHECK curl -f http://localhost:8080/health, which is
+# wrong for this container in two ways: llama-server is not listening at all
+# until the model finishes downloading, and /health answers 503 (not 2xx) while
+# the model loads. `curl -f` fails on both, so Docker marks the worker unhealthy
+# after ~90s and RunPod recycles it -- an endless restart loop that never lets a
+# 25 GB download finish. Readiness is reported through the handler's `status`
+# command instead, so the container-level probe is simply disabled.
+HEALTHCHECK NONE
+
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \

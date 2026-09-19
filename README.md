@@ -141,7 +141,11 @@ curl -X POST https://api.runpod.ai/v2/968l6bh7yree8t/runsync \
   }'
 ```
 
-A resposta vem em `output`, no formato OpenAI (`choices[0].message.content`).
+A resposta vem em `output`. Como o handler é um **gerador** (necessário para o gateway OpenAI transmitir SSE), o RunPod agrega os chunks: `output` é uma **lista** com um elemento, não o objeto direto.
+
+```json
+{"output": [{"choices": [{"message": {"content": "..."}}], "usage": {...}}]}
+```
 
 Formas de entrada aceitas:
 
@@ -149,9 +153,44 @@ Formas de entrada aceitas:
 |---|---|
 | `{"input": {"messages": [...]}}` | Forma curta |
 | `{"input": {"prompt": "..."}}` | Turno único |
-| `{"input": {"openai_input": {...}}}` | Cliente que já fala o formato do proxy OpenAI do RunPod |
+| `{"input": {"openai_route": ..., "openai_input": {...}}}` | O que o gateway OpenAI do RunPod envia |
+| `{"input": {"openai_route": "/v1/models"}}` | Rota sem corpo vira GET |
 
-`temperature`, `top_p`, `max_tokens`, `tools`, `stop` são repassados ao `llama-server`. `stream` é sempre forçado para `false` internamente: o RunPod devolve um único documento JSON, e pedir SSE ao llama-server quebraria a resposta.
+`temperature`, `top_p`, `max_tokens`, `tools`, `stop` são repassados ao `llama-server`. Na forma curta (`messages`/`prompt`) o `stream` é forçado para `false`, porque o RunPod devolve um único documento JSON e não há stream para retransmitir.
+
+### 4. Endpoint compatível com OpenAI
+
+O RunPod expõe um gateway que traduz chamadas OpenAI em jobs e retransmite o SSE do worker:
+
+```
+https://api.runpod.ai/v2/968l6bh7yree8t/openai/v1
+```
+
+Use a **RunPod API key** como chave (não é uma chave OpenAI):
+
+```bash
+curl https://api.runpod.ai/v2/968l6bh7yree8t/openai/v1/chat/completions \
+  -H "Authorization: Bearer $RUNPOD_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "qwen3.6-35b-uncensored",
+       "messages": [{"role": "user", "content": "Ola"}],
+       "max_tokens": 512, "stream": true}'
+```
+
+Duas restrições do gateway, verificadas experimentalmente:
+
+- **`stream: true` é obrigatório.** Sem ele o gateway responde `500` — ele só retransmite Server-Sent Events. É por isso que o handler é um gerador assíncrono.
+- `GET /v1/models` funciona, mas clientes que dependem dele para descobrir modelos devem usar o alias exato `qwen3.6-35b-uncensored`.
+
+Para configurar no **DeepSeek Harness** (Settings → Models → Add a custom provider):
+
+| Campo | Valor |
+|---|---|
+| Endpoint | `https://api.runpod.ai/v2/968l6bh7yree8t/openai/v1` |
+| API protocol | `openai-completions` |
+| API key | a RunPod API key |
+| Model ID | `qwen3.6-35b-uncensored` |
+
 
 ## Troubleshooting
 

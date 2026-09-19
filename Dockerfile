@@ -42,10 +42,12 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 # runpod      -> serverless runtime
-# requests    -> talks to llama-server over localhost
+# aiohttp     -> async proxying to llama-server, including SSE passthrough
+# requests    -> readiness probing of llama-server
 # huggingface_hub[hf_transfer] -> fetches the GGUF once, on first boot
 RUN pip3 install --no-cache-dir \
       runpod \
+      aiohttp \
       requests \
       "huggingface_hub[hf_transfer]"
 

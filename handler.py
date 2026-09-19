@@ -7,26 +7,52 @@ Architecture
 
 llama-server is launched once per worker and mmap()s the GGUF directly from the
 network volume. Nothing is copied into the container, so cold starts only pay
-for loading the weights into VRAM rather than duplicating a 17-26 GB file.
+for loading the weights into VRAM rather than duplicating a 25 GB file.
 
-Job inputs accepted (all optional except one of messages/prompt):
+Two ways in
+-----------
+1. RunPod's OpenAI passthrough. The platform's OpenAI gateway turns
+   `POST /openai/v1/chat/completions` into a job shaped like
 
-    {"input": {"messages": [...]}}                  # OpenAI-ish, short form
+       {"input": {"openai_route": "/v1/chat/completions",
+                  "openai_input": {...the OpenAI body...}}}
+
+   and a bare `GET /openai/v1/models` into `{"input": {"openai_route": "/v1/models"}}`.
+   That gateway relays Server-Sent Events only, so a streaming request is proxied
+   through byte-for-byte. This is why the handler is an async generator: the
+   RunPod SDK only enters its streaming path when the handler *function* is a
+   generator, so every result is yielded.
+
+2. Plain jobs on /run and /runsync, using `messages`, `prompt`, or the diagnostic
+   `command` values.
+
+Job inputs accepted:
+
+    {"input": {"openai_route": "/v1/chat/completions",
+               "openai_input": {...}}}              # what the OpenAI gateway sends
+    {"input": {"openai_route": "/v1/models"}}       # bare route -> GET
+    {"input": {"messages": [...]}}                  # short form
     {"input": {"prompt": "..."}}                    # single user turn
-    {"input": {"openai_input": {"messages": [...]}}}  # RunPod OpenAI proxy form
     {"input": {"command": "status"}}                # readiness / download report
+    {"input": {"command": "props"}}                 # chat template + capabilities
     {"input": {"command": "download"}}              # force model fetch, blocking
 
-Extra sampling/tool fields inside `openai_input` or the top-level input
-(temperature, top_p, max_tokens, tools, stop, ...) are forwarded to llama-server.
+Extra sampling/tool fields (temperature, top_p, max_tokens, tools, stop, ...)
+are forwarded to llama-server.
+
+WARNING for maintainers: because the handler is a generator, RunPod aggregates
+yielded values, so /runsync returns `output` as a LIST of chunks rather than one
+object. That is inherent to the streaming contract, not a choice made here.
 """
 
+import json
 import os
 import shlex
 import subprocess
 import threading
 import time
 
+import aiohttp
 import requests
 import runpod
 
@@ -77,8 +103,15 @@ MODEL_PATH = os.path.join(MODEL_DIR, MODEL_FILE)
 MMPROJ_PATH = os.path.join(MODEL_DIR, MMPROJ_FILE) if MMPROJ_FILE else ""
 
 BASE_URL = f"http://{LLAMA_HOST}:{LLAMA_PORT}"
-# Fields we translate rather than pass through verbatim.
-_CONTROL_KEYS = {"command", "messages", "prompt", "openai_input", "stream"}
+VOLUME_ROOT = "/runpod-volume"
+
+# Route the OpenAI gateway uses when it does not name one explicitly.
+DEFAULT_CHAT_ROUTE = "/v1/chat/completions"
+# Longest a single generation may take, in seconds.
+GENERATION_TIMEOUT = int(os.environ.get("GENERATION_TIMEOUT", "600"))
+
+# Fields we translate rather than forward verbatim.
+_CONTROL_KEYS = {"command", "messages", "openai_route", "prompt", "openai_input"}
 
 # --------------------------------------------------------------------------- #
 # Shared worker state
@@ -89,7 +122,6 @@ _state = {
     "ready": False,
     "error": None,
     "downloading": False,
-    "download_note": "",
 }
 
 
@@ -136,9 +168,6 @@ def _background_download():
     finally:
         with _lock:
             _state["downloading"] = False
-
-
-VOLUME_ROOT = "/runpod-volume"
 
 
 def ensure_model():
@@ -274,7 +303,6 @@ def supervise():
         time.sleep(10)
         with _lock:
             proc = _state["proc"]
-            ready = _state["ready"]
         if proc is None:
             continue
         if proc.poll() is not None:
@@ -285,8 +313,13 @@ def supervise():
 
 
 # --------------------------------------------------------------------------- #
-# Request handling
+# Response helpers
 # --------------------------------------------------------------------------- #
+def _openai_error(message, err_type="worker_error"):
+    """OpenAI-shaped error, which is what the platform gateway expects."""
+    return {"error": {"message": str(message), "type": err_type, "code": None}}
+
+
 def _status_payload():
     with _lock:
         ready = _state["ready"]
@@ -310,84 +343,147 @@ def _status_payload():
     return payload
 
 
-def _normalise(job_input):
-    """Accept both RunPod's OpenAI proxy shape and a plain messages list."""
-    openai_input = job_input.get("openai_input") or {}
-    source = openai_input or job_input
+def _resolve_route(job_input):
+    """Map a job to (route, method, body) per RunPod's OpenAI passthrough.
 
-    messages = source.get("messages") or []
+    Returns (None, None, None) when the job is not an OpenAI passthrough, in
+    which case the caller falls back to the messages/prompt shortcuts.
+    """
+    if job_input.get("openai_input"):
+        route = job_input.get("openai_route") or DEFAULT_CHAT_ROUTE
+        return route, "POST", dict(job_input["openai_input"])
+
+    if job_input.get("openai_route"):
+        # A bare route with no body is a read-only request, e.g. /v1/models.
+        return job_input["openai_route"], "GET", None
+
+    return None, None, None
+
+
+def _shortcut_body(job_input):
+    """Build a chat body from the plain messages/prompt short form."""
+    messages = job_input.get("messages") or []
     if not messages:
-        prompt = job_input.get("prompt") or source.get("prompt")
+        prompt = job_input.get("prompt")
         if prompt:
             messages = [{"role": "user", "content": prompt}]
+    if not messages:
+        return None
 
-    payload = {k: v for k, v in source.items() if k not in _CONTROL_KEYS}
-    payload["messages"] = messages
-    payload.setdefault("model", MODEL_ALIAS)
-    # RunPod returns a single JSON document, so never ask upstream for SSE.
-    payload["stream"] = False
-    return payload
+    body = {k: v for k, v in job_input.items() if k not in _CONTROL_KEYS}
+    body["messages"] = messages
+    body.setdefault("model", MODEL_ALIAS)
+    # Short-form callers get one JSON document; the platform has no stream to
+    # relay for them, so never ask upstream for SSE here.
+    body["stream"] = False
+    return body
 
 
-def handler(job):
+async def _request_json(route, method, body):
+    timeout = aiohttp.ClientTimeout(total=GENERATION_TIMEOUT)
+    url = f"{BASE_URL}{route}"
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.request(method, url, json=body) as resp:
+                raw = await resp.text()
+                if resp.status >= 400:
+                    return _openai_error(
+                        f"llama-server HTTP {resp.status} on {method} {route}: {raw[:1000]}",
+                        err_type="upstream_error",
+                    )
+                try:
+                    return json.loads(raw)
+                except ValueError:
+                    # A route such as /props may legitimately return non-JSON.
+                    return raw
+    except aiohttp.ClientError as exc:
+        return _openai_error(f"llama-server request failed: {exc}", "upstream_error")
+    except Exception as exc:  # noqa: BLE001
+        return _openai_error(f"unexpected error: {exc}")
+
+
+async def _stream_route(route, body):
+    """Yield llama-server's SSE bytes verbatim so the gateway can relay them."""
+    timeout = aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=GENERATION_TIMEOUT)
+    url = f"{BASE_URL}{route}"
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(url, json=body) as resp:
+                if resp.status >= 400:
+                    raw = await resp.text()
+                    yield _openai_error(
+                        f"llama-server HTTP {resp.status} on POST {route}: {raw[:1000]}",
+                        err_type="upstream_error",
+                    )
+                    return
+                async for chunk in resp.content.iter_any():
+                    yield chunk.decode("utf-8", errors="replace")
+    except aiohttp.ClientError as exc:
+        yield _openai_error(f"llama-server stream failed: {exc}", "upstream_error")
+    except Exception as exc:  # noqa: BLE001
+        yield _openai_error(f"unexpected stream error: {exc}")
+
+
+# --------------------------------------------------------------------------- #
+# Handler
+# --------------------------------------------------------------------------- #
+async def handler(job):
+    """Async generator: RunPod only streams when the handler is a generator."""
     job_input = job.get("input") or {}
 
     command = (job_input.get("command") or "").strip().lower()
     if command in {"status", "health"}:
-        return _status_payload()
+        yield _status_payload()
+        return
     if command == "props":
-        # Surfaces the model's embedded chat template and its capabilities, which
-        # is how you confirm tool calling is actually available before relying on it.
-        try:
-            r = requests.get(f"{BASE_URL}/props", timeout=30)
-            return r.json()
-        except requests.RequestException as exc:
-            return {"error": f"llama-server /props failed: {exc}"}
+        yield await _request_json("/props", "GET", None)
+        return
     if command == "download":
         try:
             _download_model()
         except Exception as exc:  # noqa: BLE001
             with _lock:
                 _state["error"] = f"model download failed: {exc}"
-            return _status_payload()
-        return _status_payload()
+        yield _status_payload()
+        return
 
-    payload = _normalise(job_input)
-    if not payload["messages"]:
-        return {"error": "No messages provided"}
+    route, method, body = _resolve_route(job_input)
+    if route is None:
+        body = _shortcut_body(job_input)
+        if body is None:
+            yield _openai_error("No messages provided", "invalid_request_error")
+            return
+        route, method = DEFAULT_CHAT_ROUTE, "POST"
 
     with _lock:
         ready = _state["ready"]
     if not ready:
-        # Distinguish "still warming up" from "actually broken".
         status = _status_payload()
-        status["error"] = status.get("error", "model_not_ready")
-        return status
+        status.setdefault("error", "model_not_ready")
+        yield status
+        return
 
-    try:
-        r = requests.post(
-            f"{BASE_URL}/v1/chat/completions",
-            json=payload,
-            timeout=600,
-        )
-    except requests.RequestException as exc:
-        return {"error": f"llama-server request failed: {exc}"}
+    wants_stream = (
+        method != "GET" and isinstance(body, dict) and body.get("stream") is True
+    )
 
-    if r.status_code != 200:
-        return {
-            "error": f"llama-server returned HTTP {r.status_code}",
-            "detail": r.text[:2000],
-        }
-    return r.json()
+    if wants_stream:
+        async for part in _stream_route(route, body):
+            yield part
+    else:
+        yield await _request_json(route, method, body)
 
 
 if __name__ == "__main__":
     log(f"Model path: {MODEL_PATH}")
     if start_server():
         threading.Thread(target=supervise, daemon=True).start()
-        runpod.serverless.start({"handler": handler})
     else:
         # Keep the worker alive so /run can report *why* it is unhealthy rather
         # than the endpoint dying with no diagnosable output.
         log(f"FATAL: {_state['error']}")
-        runpod.serverless.start({"handler": handler})
+
+    # return_aggregate_stream keeps every yielded chunk in the final job result
+    # instead of dropping them, so a non-streaming caller still receives the
+    # full completion (as a list of chunks).
+    runpod.serverless.start({"handler": handler, "return_aggregate_stream": True})
